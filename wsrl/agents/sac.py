@@ -455,15 +455,27 @@ class SACAgent(flax.struct.PyTreeNode):
         object.__setattr__(self, "config", self.config.copy(new_config))
 
     @classmethod
-    def _create_common(
+    def create(
         cls,
         rng: PRNGKey,
         observations: Data,
         actions: jnp.ndarray,
-        # Models
-        actor_def: nn.Module,
-        critic_def: nn.Module,
-        temperature_def: nn.Module,
+        # Model architecture
+        encoder_def: nn.Module,
+        shared_encoder: bool = True,
+        critic_network_kwargs: dict = {
+            "hidden_dims": [256, 256],
+        },
+        policy_network_kwargs: dict = {
+            "hidden_dims": [256, 256],
+        },
+        policy_kwargs: dict = {
+            "tanh_squash_distribution": True,
+            "std_parameterization": "exp",
+        },
+        critic_ensemble_size: int = 2,
+        critic_subsample_size: Optional[int] = None,
+        temperature_init: float = 1.0,
         # Optimizer
         actor_optimizer_kwargs={
             "learning_rate": 3e-4,
@@ -481,22 +493,58 @@ class SACAgent(flax.struct.PyTreeNode):
         soft_target_update_rate: float = 0.005,
         target_entropy: Optional[float] = None,
         backup_entropy: bool = False,
-        critic_ensemble_size: int = 2,
-        critic_subsample_size: Optional[int] = None,
         # bc loss:
         bc_loss_weight: float = 0.0,
         **kwargs,
     ):
-        """common part of both create() methods.
-        for real create, call create() or create_states()"""
+        """
+        Create a new pixel-based agent, with no encoders.
+        This is the default create.
+        """
+
+        if shared_encoder:
+            encoders = {
+                "actor": encoder_def,
+                "critic": encoder_def,
+            }
+        else:
+            encoders = {
+                "actor": encoder_def,
+                "critic": copy.deepcopy(encoder_def),
+            }
+
+        # Define networks
+        policy_def = Policy(
+            encoder=encoders["actor"],
+            network=MLP(**policy_network_kwargs),
+            action_dim=actions.shape[-1],
+            **policy_kwargs,
+            name="actor",
+        )
+
+        critic_backbone = partial(MLP, **critic_network_kwargs)
+        critic_backbone = ensemblize(critic_backbone, critic_ensemble_size)(
+            name="critic_ensemble"
+        )
+        critic_def = partial(
+            Critic,
+            encoder=encoders["critic"],
+            network=critic_backbone,
+        )(name="critic")
+
+        temperature_def = GeqLagrangeMultiplier(
+            init_value=temperature_init,
+            constraint_shape=(),
+            constraint_type="geq",
+            name="temperature",
+        )
         networks = {
-            "actor": actor_def,
+            "actor": policy_def,
             "critic": critic_def,
             "temperature": temperature_def,
         }
 
         model_def = ModuleDict(networks)
-
         # Define optimizers
         txs = {
             "actor": make_optimizer(**actor_optimizer_kwargs),
@@ -540,85 +588,6 @@ class SACAgent(flax.struct.PyTreeNode):
                 max_target_backup=max_target_backup,
                 **kwargs,
             ),
-        )
-
-    @classmethod
-    def create(
-        cls,
-        rng: PRNGKey,
-        observations: Data,
-        actions: jnp.ndarray,
-        # Model architecture
-        encoder_def: nn.Module,
-        shared_encoder: bool = True,
-        critic_network_kwargs: dict = {
-            "hidden_dims": [256, 256],
-        },
-        policy_network_kwargs: dict = {
-            "hidden_dims": [256, 256],
-        },
-        policy_kwargs: dict = {
-            "tanh_squash_distribution": True,
-            "std_parameterization": "exp",
-        },
-        critic_ensemble_size: int = 2,
-        critic_subsample_size: Optional[int] = None,
-        temperature_init: float = 1.0,
-        **kwargs,
-    ):
-        """
-        Create a new pixel-based agent, with no encoders.
-        This is the default create.
-        Call cls.create_states to create a state-based agent.
-        """
-
-        if shared_encoder:
-            encoders = {
-                "actor": encoder_def,
-                "critic": encoder_def,
-            }
-        else:
-            encoders = {
-                "actor": encoder_def,
-                "critic": copy.deepcopy(encoder_def),
-            }
-
-        # Define networks
-        policy_def = Policy(
-            encoder=encoders["actor"],
-            network=MLP(**policy_network_kwargs),
-            action_dim=actions.shape[-1],
-            **policy_kwargs,
-            name="actor",
-        )
-
-        critic_backbone = partial(MLP, **critic_network_kwargs)
-        critic_backbone = ensemblize(critic_backbone, critic_ensemble_size)(
-            name="critic_ensemble"
-        )
-        critic_def = partial(
-            Critic,
-            encoder=encoders["critic"],
-            network=critic_backbone,
-        )(name="critic")
-
-        temperature_def = GeqLagrangeMultiplier(
-            init_value=temperature_init,
-            constraint_shape=(),
-            constraint_type="geq",
-            name="temperature",
-        )
-
-        return cls._create_common(
-            rng,
-            observations,
-            actions,
-            actor_def=policy_def,
-            critic_def=critic_def,
-            temperature_def=temperature_def,
-            critic_ensemble_size=critic_ensemble_size,
-            critic_subsample_size=critic_subsample_size,
-            **kwargs,
         )
 
     @partial(jax.jit, static_argnames=("utd_ratio", "pmap_axis"))
