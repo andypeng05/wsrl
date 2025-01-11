@@ -146,13 +146,13 @@ def main(_):
         env_name=FLAGS.env,
         reward_scale=FLAGS.reward_scale,
         reward_bias=FLAGS.reward_bias,
-        scale_and_clip_action=True,
+        scale_and_clip_action=env_type in ("antmaze", "kitchen", "locomotion"),
         action_clip_lim=FLAGS.clip_action,
         seed=FLAGS.seed,
     )
     eval_env = make_gym_env(
         env_name=FLAGS.env,
-        scale_and_clip_action=True,
+        scale_and_clip_action=env_type in ("antmaze", "kitchen", "locomotion"),
         action_clip_lim=FLAGS.clip_action,
         seed=FLAGS.seed + 1000,
     )

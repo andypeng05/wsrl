@@ -4,10 +4,13 @@ source: https://github.com/nakamotoo/Cal-QL/blob/ac6eafec22e8d60836573e1f488c7f6
 import os
 
 import numpy as np
+from absl import flags
 
 from wsrl.envs.env_common import calc_return_to_go
 
 DEMO_PATHS = os.environ.get("DATA_DIR_PREFIX", os.path.expanduser("~/adroit_data"))
+
+FLAGS = flags.FLAGS
 
 
 def get_hand_dataset_with_mc_calculation(
@@ -63,7 +66,7 @@ def get_hand_dataset_with_mc_calculation(
         actions = np.array(dataset[i]["actions"])[start_index:end_index]
         mc_returns = calc_return_to_go(
             env_name,
-            rewards,
+            rewards * FLAGS.reward_scale + FLAGS.reward_bias,
             1 - dones,
             gamma,
             infinite_horizon=False,
