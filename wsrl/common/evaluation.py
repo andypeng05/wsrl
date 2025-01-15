@@ -74,5 +74,9 @@ def evaluate_with_trajectories(
         trajectories.append(trajectory)
 
     for k, v in stats.items():
-        stats[k] = np.mean(v)
+        try:
+            stats[k] = np.mean(v)
+        except TypeError:
+            # v might be None, or some other non-numeric type
+            pass
     return stats, trajectories
