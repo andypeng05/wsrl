@@ -1,4 +1,7 @@
 gym >= 0.26
+gymnasium==0.29.1
+mujoco==3.16.0
+dm-control==1.0.20
 numpy==1.26.4
 distrax==0.1.2
 ml_collections >= 0.1.0

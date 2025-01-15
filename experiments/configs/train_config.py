@@ -276,6 +276,79 @@ def get_config(config_string):
                 ).to_dict(),
             )
         ),
+
+        ########################################################
+        #                  ogbench configs                  #
+        ########################################################
+
+        "ogbench_cql": ConfigDict(
+            dict(
+                agent_kwargs=get_cql_config(
+                    updates=dict(
+                        policy_kwargs=dict(
+                            tanh_squash_distribution=True,
+                            std_parameterization="uniform",
+                        ),
+                        critic_network_kwargs={
+                            "hidden_dims": [512, 512, 512],
+                            "activations": "relu",
+                            "kernel_scale_final": 1e-2,
+                        },
+                        policy_network_kwargs={
+                            "hidden_dims": [512, 512, 512],
+                            "activations": "relu",
+                            "kernel_scale_final": 1e-2,
+                        },
+                        online_cql_alpha=5.0,
+                        cql_alpha=5.0,
+                    )
+                ).to_dict(),
+            )
+        ),
+
+        "ogbench_iql": ConfigDict(
+            dict(
+                agent_kwargs=get_iql_config(
+                    updates=dict(
+                        policy_network_kwargs=dict(
+                            hidden_dims=(256, 256),
+                            activations="relu",
+                        ),
+                        critic_network_kwargs=dict(
+                            hidden_dims=(256, 256),
+                            activations="relu",
+                        ),
+                        expectile=0.9,
+                        temperature=10.0,
+                    )
+                ).to_dict(),
+            )
+        ),
+
+        "ogbench_wsrl": ConfigDict(
+            dict(
+                agent_kwargs=get_wsrl_config(
+                    updates=dict(
+                        policy_kwargs=dict(
+                            tanh_squash_distribution=True,
+                            std_parameterization="uniform",
+                        ),
+                        critic_network_kwargs={
+                            "hidden_dims": [512, 512, 512],
+                            "activations": "relu",
+                            "kernel_scale_final": 1e-2,
+                            "use_layer_norm": True,
+                        },
+                        policy_network_kwargs={
+                            "hidden_dims": [512, 512, 512],
+                            "activations": "relu",
+                            "kernel_scale_final": 1e-2,
+                            "use_layer_norm": True,
+                        },
+                    )
+                ).to_dict(),
+            )
+        ),
     }
 
     return possible_structures[config_string]

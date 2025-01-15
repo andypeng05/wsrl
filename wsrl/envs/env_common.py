@@ -64,7 +64,17 @@ def get_env_type(env_name):
     separate the environment into different types
     (e.g. because different envs may need different logging / success conditions)
     """
-    if env_name in (
+
+    if (
+        "navigate" in env_name or 
+        "stitch" in env_name or 
+        "explore" in env_name or 
+        "cube" in env_name or 
+        "scene" in env_name or 
+        "puzzle" in env_name
+    ):
+        env_type = "og_bench"
+    elif env_name in (
         "pen-binary-v0",
         "door-binary-v0",
         "relocate-binary-v0",
@@ -85,7 +95,7 @@ def get_env_type(env_name):
 def _determine_whether_sparse_reward(env_name):
     # return True if the environment is sparse-reward
     # determine if the env is sparse-reward or not
-    if "antmaze" in env_name or env_name in [
+    if "maze" in env_name or env_name in [
         "pen-binary-v0",
         "door-binary-v0",
         "relocate-binary-v0",
@@ -99,6 +109,9 @@ def _determine_whether_sparse_reward(env_name):
         or "hopper" in env_name
         or "walker" in env_name
         or "kitchen" in env_name
+        or "cube" in env_name
+        or "puzzle" in env_name
+        or "scene" in env_name
     ):
         is_sparse_reward = False
     else:
@@ -118,6 +131,10 @@ ENV_REWARD_INFO = {
     "adroit-binary": {  # adroit default is -1/0 reward
         "reward_pos": 0.0,
         "reward_neg": -1.0,
+    },
+    "og_bench": {  # og bench default is 0/1 reward
+        "reward_pos": 1.0,
+        "reward_neg": 0.0,
     },
 }
 
@@ -146,6 +163,10 @@ def _get_negative_reward(env_name, reward_scale, reward_bias):
         reward_neg = (
             ENV_REWARD_INFO["adroit-binary"]["reward_neg"] * reward_scale + reward_bias
         )
+    elif "maze" in env_name:
+        reward_neg = (
+            ENV_REWARD_INFO["og_bench"]["reward_neg"] * reward_scale + reward_bias
+        )
     else:
         raise NotImplementedError(
             """
@@ -167,7 +188,7 @@ def calc_return_to_go(
     infinite_horizon=False,
 ):
     """
-    Calculat the Monte Carlo return to go given a list of reward for a single trajectory.
+    Calculate the Monte Carlo return to go given a list of reward for a single trajectory.
     Args:
         env_name: the name of the environment
         rewards: a list of rewards
@@ -183,7 +204,7 @@ def calc_return_to_go(
 
     # process sparse-reward envs
     if reward_scale is None or reward_bias is None:
-        # scale and bias not applied, but used to determien the negative reward value
+        # scale and bias not applied, but used to determine the negative reward value
         assert reward_scale is None and reward_bias is None  # both should be unset
         reward_scale = FLAGS.reward_scale
         reward_bias = FLAGS.reward_bias

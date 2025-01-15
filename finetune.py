@@ -15,6 +15,8 @@ from wsrl.common.evaluation import evaluate_with_trajectories
 from wsrl.common.wandb import WandBLogger
 from wsrl.data.replay_buffer import ReplayBuffer, ReplayBufferMC
 from wsrl.envs.adroit_binary_dataset import get_hand_dataset_with_mc_calculation
+from wsrl.envs.og_bench import make_og_bench_env, make_og_bench_datasets, \
+    make_og_bench_datasets_with_mc, choose_og_bench_task_id
 from wsrl.envs.d4rl_dataset import (
     get_d4rl_dataset,
     get_d4rl_dataset_with_mc_calculation,
@@ -58,6 +60,9 @@ flags.DEFINE_bool(
 flags.DEFINE_integer(
     "warmup_steps", 0, "number of warmup steps (WSRL) before performing online updates"
 )
+
+#validation
+flags.DEFINE_integer('validation_interval', 50_000, 'Validation every n steps')
 
 # agent
 flags.DEFINE_string("agent", "calql", "what RL agent to use")
@@ -104,15 +109,10 @@ def main(_):
         "mixed",
         "append",
     ], "incorrect online sampling method"
+    assert FLAGS.validation_interval % FLAGS.log_interval == 0
 
     if FLAGS.use_redq:
         FLAGS.config.agent_kwargs = add_redq_config(FLAGS.config.agent_kwargs)
-
-    min_steps_to_update = FLAGS.batch_size * (1 - FLAGS.offline_data_ratio)
-    if FLAGS.agent == "calql":
-        min_steps_to_update = max(
-            min_steps_to_update, gym.make(FLAGS.env)._max_episode_steps
-        )
 
     """
     wandb and logging
@@ -144,25 +144,67 @@ def main(_):
     # do not clip adroit actions online following CalQL repo
     # https://github.com/nakamotoo/Cal-QL
     env_type = get_env_type(FLAGS.env)
-    finetune_env = make_gym_env(
-        env_name=FLAGS.env,
-        reward_scale=FLAGS.reward_scale,
-        reward_bias=FLAGS.reward_bias,
-        scale_and_clip_action=env_type in ("antmaze", "kitchen", "locomotion"),
-        action_clip_lim=FLAGS.clip_action,
-        seed=FLAGS.seed,
-    )
-    eval_env = make_gym_env(
-        env_name=FLAGS.env,
-        scale_and_clip_action=env_type in ("antmaze", "kitchen", "locomotion"),
-        action_clip_lim=FLAGS.clip_action,
-        seed=FLAGS.seed + 1000,
-    )
+    if env_type == 'og_bench':
+        og_bench_task_id = choose_og_bench_task_id(FLAGS.env)
+
+    if env_type == "og_bench":
+        # OG Bench
+        finetune_env = make_og_bench_env(
+            task_id=og_bench_task_id,
+            env_name=FLAGS.env,
+            reward_scale=FLAGS.reward_scale,
+            reward_bias=FLAGS.reward_bias,
+            seed=FLAGS.seed,
+        )
+        eval_env = make_og_bench_env(
+            task_id=og_bench_task_id,
+            env_name=FLAGS.env,
+            seed=FLAGS.seed + 1000
+        )
+    else:
+        finetune_env = make_gym_env(
+            env_name=FLAGS.env,
+            reward_scale=FLAGS.reward_scale,
+            reward_bias=FLAGS.reward_bias,
+            scale_and_clip_action=env_type in ("antmaze", "kitchen", "locomotion"),
+            action_clip_lim=FLAGS.clip_action,
+            seed=FLAGS.seed,
+        )
+        eval_env = make_gym_env(
+            env_name=FLAGS.env,
+            scale_and_clip_action=env_type in ("antmaze", "kitchen", "locomotion"),
+            action_clip_lim=FLAGS.clip_action,
+            seed=FLAGS.seed + 1000,
+        )
+
+    min_steps_to_update = FLAGS.batch_size * (1 - FLAGS.offline_data_ratio)
+    if FLAGS.agent == "calql":
+        min_steps_to_update = max(
+            min_steps_to_update, finetune_env.spec.max_episode_steps
+        )
 
     """
     load dataset
     """
-    if env_type == "adroit-binary":
+    if env_type == "og_bench":
+        if FLAGS.agent == 'calql':
+            dataset, val_dataset = make_og_bench_datasets_with_mc(
+                task_id=og_bench_task_id,
+                gamma=FLAGS.config.agent_kwargs.discount,
+                env_name=FLAGS.env,
+                reward_scale=FLAGS.reward_scale,
+                reward_bias=FLAGS.reward_bias,
+                seed=FLAGS.seed,
+            )
+        else:
+            dataset, val_dataset = make_og_bench_datasets(
+                task_id=og_bench_task_id,
+                env_name=FLAGS.env,
+                reward_scale=FLAGS.reward_scale,
+                reward_bias=FLAGS.reward_bias,
+                seed=FLAGS.seed,
+            )
+    elif env_type == "adroit-binary":
         dataset = get_hand_dataset_with_mc_calculation(
             FLAGS.env,
             gamma=FLAGS.config.agent_kwargs.discount,
@@ -170,6 +212,7 @@ def main(_):
             reward_bias=FLAGS.reward_bias,
             clip_action=FLAGS.clip_action,
         )
+        val_dataset = jax.tree_map(lambda x: x[: len(x) // 10], dataset)
     else:
         if FLAGS.agent == "calql":
             # need dataset with mc return
@@ -190,6 +233,7 @@ def main(_):
             dataset["rewards"] = (
                 dataset["rewards"] * FLAGS.reward_scale + FLAGS.reward_bias
             )
+        val_dataset = jax.tree_map(lambda x: x[: len(x) // 10], dataset)
 
     """
     replay buffer
@@ -248,6 +292,8 @@ def main(_):
             eval_info["success_rate"] = np.mean(
                 [any(d["goal_achieved"] for d in t["infos"]) for t in trajs]
             )
+        elif env_type == 'og_bench':
+            eval_info['success_rate'] = np.mean([t['infos'][-1]['success'] for t in trajs])
         elif env_type == "kitchen":
             # kitchen
             eval_info["num_stages_solved"] = np.mean([t["rewards"][-1] for t in trajs])
@@ -403,6 +449,13 @@ def main(_):
                     wandb_logger=wandb_logger,
                 )
 
+        """Validation"""
+        if step % FLAGS.validation_interval == 0:
+            logging.info("Validation...")
+            with timer.context("validation"):
+                val_batch = subsample_batch(val_dataset, FLAGS.batch_size)
+                val_metrics = agent.get_debug_metrics(val_batch)
+
         """
         Save Checkpoint
         """
@@ -423,6 +476,11 @@ def main(_):
             if "update_info" in locals():
                 update_info = jax.device_get(update_info)
                 wandb_logger.log({"training": update_info}, step=step)
+                
+            # check if val_metrics is available
+            if 'val_metrics' in locals():
+                validation_info = jax.device_get(val_metrics)
+                wandb_logger.log({"validation": validation_info}, step=step)
 
             wandb_logger.log({"timer": timer.get_average_times()}, step=step)
 
