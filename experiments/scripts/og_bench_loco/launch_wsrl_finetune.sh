@@ -7,7 +7,7 @@ python finetune.py \
 --config experiments/configs/train_config.py:ogbench_wsrl \
 --project ogbench-finetune \
 --reward_scale 1.0 \
---reward_bias -1.0 \
+--reward_bias 0.0 \
 --num_offline_steps 1_000_000 \
 --env antmaze-large-navigate-v0 \
 --utd 4 \

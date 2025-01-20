@@ -263,16 +263,25 @@ class ScaledRewardWrapper(gym.Wrapper):
 
 
 class MazeSingleTaskWrapper(gym.Wrapper):
-    def __init__(self, env, task_id=1):
+    def __init__(self, env, task_id=1, reward_type="negative"):
         super().__init__(env)
 
         self.task_id = task_id
+        self.reward_type = reward_type
 
     def reset(self, options=None, *args, **kwargs):
         if options is None:
             options = {}
         options["task_id"] = self.task_id
         return self.env.reset(options=options, *args, **kwargs)
+    
+    def step(self, action):
+        ob, reward, terminated, truncated, info = self.env.step(action)
+
+        if self.reward_type == "negative":
+            reward = reward - 1.0
+
+        return ob, reward, terminated, truncated, info
 
 
 class ManipSingleTaskWrapper(gym.Wrapper):
