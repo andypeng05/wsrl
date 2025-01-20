@@ -102,6 +102,7 @@ def _determine_whether_sparse_reward(env_name):
         "pen-binary",
         "door-binary",
         "relocate-binary",
+        "cube-single"
     ]:
         is_sparse_reward = True
     elif (
@@ -132,9 +133,9 @@ ENV_REWARD_INFO = {
         "reward_pos": 0.0,
         "reward_neg": -1.0,
     },
-    "og_bench": {  # og bench default is 0/1 reward
-        "reward_pos": 1.0,
-        "reward_neg": 0.0,
+    "og_bench": {  # og bench default is -1/0 reward (with wrapper)
+        "reward_pos": 0.0,
+        "reward_neg": -1.0,
     },
 }
 
@@ -151,7 +152,7 @@ def _get_negative_reward(env_name, reward_scale, reward_bias):
 
     NOTE: this function should only be called on sparse-reward environments
     """
-    if "antmaze" in env_name:
+    if "antmaze" in env_name and ("diverse" in env_name or "play" in env_name):
         reward_neg = (
             ENV_REWARD_INFO["antmaze"]["reward_neg"] * reward_scale + reward_bias
         )
@@ -163,7 +164,7 @@ def _get_negative_reward(env_name, reward_scale, reward_bias):
         reward_neg = (
             ENV_REWARD_INFO["adroit-binary"]["reward_neg"] * reward_scale + reward_bias
         )
-    elif "maze" in env_name:
+    elif "maze" in env_name or "cube" in env_name:
         reward_neg = (
             ENV_REWARD_INFO["og_bench"]["reward_neg"] * reward_scale + reward_bias
         )

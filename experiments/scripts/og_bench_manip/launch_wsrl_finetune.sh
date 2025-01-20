@@ -4,7 +4,7 @@ export MUJOCO_GL=egl
 
 python finetune.py \
 --agent sac \
---config experiments/configs/train_config.py:ogbench_cql_redq \
+--config experiments/configs/train_config.py:ogbench_wsrl \
 --project ogbench-finetune \
 --num_offline_steps 1_000_000 \
 --env cube-single-play-v0 \

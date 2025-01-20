@@ -368,7 +368,7 @@ def maze_convert_to_single_task_dataset(env_name, env, dataset, task_id):
         # antsoccer: 2D position of the ball.
         dists = np.linalg.norm(dataset["observations"][:, 15:17] - goal_xy, axis=-1)
     successes = (dists <= goal_tol).astype(np.float32)
-    dataset["rewards"] = successes
+    dataset["rewards"] = successes - 1.0 # change from 0/1 to -1/0
     dataset["terminals"] = dataset["dones"] = successes
     dataset["masks"] = 1.0 - successes
 
