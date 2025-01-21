@@ -227,6 +227,8 @@ def make_og_bench_env_and_datasets(
 
         if "cube" in env_name or "scene" in env_name:
             env_kwargs = dict(permute_blocks=False)
+            if "scene" in env_name:
+                env_kwargs["max_episode_steps"] = 1000
         else:
             env_kwargs = dict()
 
