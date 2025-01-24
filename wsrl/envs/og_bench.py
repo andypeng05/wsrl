@@ -27,7 +27,7 @@ def choose_og_bench_task_id(env_name):
     if "maze" in env_name:
         task_id = 1
     elif "cube" in env_name:
-        task_id = 2
+        task_id = 1
     elif "scene" in env_name:
         task_id = 3
     elif "puzzle-3x3" in env_name:
@@ -140,10 +140,9 @@ def ogbench_dataset_and_calc_mc(
         start_idx = i * env.spec.max_episode_steps
         end_idx = (i + 1) * env.spec.max_episode_steps
         episode_data = {k: np.array(v[start_idx:end_idx]) for k, v in dataset.items()}
-
-        # then, break up this episode if there are `done` signals
-        if sum(episode_data["dones"]) > 0:
-            done_idxs = np.where(episode_data["dones"])[0]
+        # then, break up this episode if there are `done` signals using terminals
+        if sum(episode_data["terminals"]) > 0:
+            done_idxs = np.where(episode_data["terminals"])[0]
             # if there are consecutive done, only keep the last one
             last_of_consecutive_dones = np.where(np.diff(done_idxs) > 1)[0]
             if len(last_of_consecutive_dones) > 0:
@@ -176,7 +175,7 @@ def ogbench_dataset_and_calc_mc(
         episode_data["mc_returns"] = calc_return_to_go(
             env.spec.name,
             episode_data["rewards"],
-            1 - episode_data["dones"],
+            1 - episode_data["terminals"],
             gamma,
             reward_scale,
             reward_bias,
@@ -203,8 +202,14 @@ def make_og_bench_env_and_datasets(
         env, train_dataset, val_dataset = ogbench.make_env_and_datasets(
             env_name, compact_dataset=False, **env_kwargs
         )
+        if "singletask" not in env_name:
+            env = MazeSingleTaskWrapper(env, task_id)
 
-        env = MazeSingleTaskWrapper(env, task_id)
+            for ds in (train_dataset, val_dataset):
+                maze_convert_to_single_task_dataset(env_name, env, ds, task_id)
+                if reward_scale is not None and reward_bias is not None:
+                    ds["rewards"] = ds["rewards"] * reward_scale + reward_bias
+
         if reward_scale is not None and reward_bias is not None:
             env = ScaledRewardWrapper(env, scale=reward_scale, bias=reward_bias)
 
@@ -213,11 +218,6 @@ def make_og_bench_env_and_datasets(
         env = gymnasium.wrappers.ClipAction(env)
         train_dataset["actions"] = np.clip(train_dataset["actions"], -0.999, 0.999)
         val_dataset["actions"] = np.clip(val_dataset["actions"], -0.999, 0.999)
-
-        for ds in (train_dataset, val_dataset):
-            maze_convert_to_single_task_dataset(env_name, env, ds, task_id)
-            if reward_scale is not None and reward_bias is not None:
-                ds["rewards"] = ds["rewards"] * reward_scale + reward_bias
 
     elif "cube" in env_name or "scene" in env_name or "puzzle" in env_name:
         # OG Bench manipulation envs
@@ -235,13 +235,13 @@ def make_og_bench_env_and_datasets(
         env, train_dataset, val_dataset = ogbench.make_env_and_datasets(
             env_name, compact_dataset=False, **env_kwargs
         )
+        if "singletask" not in env_name:
+            env = ManipSingleTaskWrapper(env_name, env, task_id, reward_type="negative")
 
-        env = ManipSingleTaskWrapper(env_name, env, task_id, reward_type="negative")
-
-        for ds in (train_dataset, val_dataset):
-            manip_convert_to_single_task_dataset(
-                env_name, env, ds, task_id, reward_type="negative"
-            )
+            for ds in (train_dataset, val_dataset):
+                manip_convert_to_single_task_dataset(
+                    env_name, env, ds, task_id, reward_type="negative"
+                )
 
     else:
         raise ValueError(f"Invalid OG Bench env name: {env_name}")
