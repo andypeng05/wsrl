@@ -49,6 +49,8 @@ def make_og_bench_env(**kwargs):
 def make_og_bench_datasets(**kwargs):
     """wrapper"""
     env, train_ds, val_ds = make_og_bench_env_and_datasets(**kwargs)
+    train_ds["dones"] = train_ds["terminals"]
+    val_ds["dones"] = val_ds["terminals"]
     del train_ds["terminals"]
     del val_ds["terminals"]
     return train_ds, val_ds
@@ -90,6 +92,7 @@ def make_og_bench_datasets_with_mc(
     )
 
     for ds in (train_ds_mc, val_ds_mc):
+        ds["dones"] = ds["terminals"]
         del ds["terminals"]
 
     return train_ds_mc, val_ds_mc

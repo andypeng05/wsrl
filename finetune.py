@@ -5,6 +5,8 @@ import gym
 import jax
 import numpy as np
 import tqdm
+import time
+
 from absl import app, flags, logging
 from flax.training import checkpoints
 from ml_collections import config_flags
@@ -114,6 +116,7 @@ def main(_):
     if FLAGS.use_redq:
         FLAGS.config.agent_kwargs = add_redq_config(FLAGS.config.agent_kwargs)
 
+    time.sleep(FLAGS.seed)
     """
     wandb and logging
     """
