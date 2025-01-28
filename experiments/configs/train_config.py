@@ -303,6 +303,8 @@ def get_config(config_string):
                         cql_alpha=5.0,
                     )
                 ).to_dict(),
+                encoder="small",
+                encoder_kwargs=dict(),
             )
         ),
 
@@ -322,6 +324,8 @@ def get_config(config_string):
                         temperature=10.0,
                     )
                 ).to_dict(),
+                encoder="small",
+                encoder_kwargs=dict(),
             )
         ),
 
@@ -347,6 +351,8 @@ def get_config(config_string):
                         },
                     )
                 ).to_dict(),
+                encoder="small",
+                encoder_kwargs=dict(),
             )
         ),
     }

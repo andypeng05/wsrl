@@ -26,6 +26,7 @@ from wsrl.envs.d4rl_dataset import (
 from wsrl.envs.env_common import get_env_type, make_gym_env
 from wsrl.utils.timer_utils import Timer
 from wsrl.utils.train_utils import concatenate_batches, subsample_batch
+from wsrl.vision import encoders
 
 FLAGS = flags.FLAGS
 
@@ -116,6 +117,7 @@ def main(_):
     if FLAGS.use_redq:
         FLAGS.config.agent_kwargs = add_redq_config(FLAGS.config.agent_kwargs)
 
+    # TODO: remove
     time.sleep(FLAGS.seed)
     """
     wandb and logging
@@ -253,6 +255,12 @@ def main(_):
     """
     Initialize agent
     """
+    # encoder
+    if "visual" in FLAGS.env:
+        encoder_def = encoders[FLAGS.config.encoder](**FLAGS.config.encoder_kwargs)
+    else:
+        encoder_def = None
+
     rng = jax.random.PRNGKey(FLAGS.seed)
     rng, construct_rng = jax.random.split(rng)
     example_batch = subsample_batch(dataset, FLAGS.batch_size)
@@ -260,7 +268,7 @@ def main(_):
         rng=construct_rng,
         observations=example_batch["observations"],
         actions=example_batch["actions"],
-        encoder_def=None,
+        encoder_def=encoder_def,
         **FLAGS.config.agent_kwargs,
     )
 
