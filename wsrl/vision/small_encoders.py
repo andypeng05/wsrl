@@ -1,12 +1,14 @@
 """From https://raw.githubusercontent.com/google/flax/main/examples/ppo/models.py"""
 from multiprocessing import pool
 from typing import Optional, Sequence, Tuple, Union
+
 import jax.numpy as jnp
 from flax import linen as nn
 
 
 class AtariEncoder(nn.Module):
     """Class defining the actor-critic model."""
+
     @nn.compact
     def __call__(self, x):
         """Define the convolutional network architecture.
@@ -35,6 +37,8 @@ class AtariEncoder(nn.Module):
         x = nn.relu(x)
         x = x.reshape((*x.shape[:-3], -1))  # flatten
         return x
+
+
 class SmallEncoder(nn.Module):
     features: Sequence[int] = (16, 16, 16)
     kernel_sizes: Sequence[int] = (3, 3, 3)
@@ -45,6 +49,7 @@ class SmallEncoder(nn.Module):
     pool_strides: Sequence[int] = (2, 2, 1)
     pool_padding: Sequence[int] = (0, 0, 0)
     bottleneck_dim: Optional[int] = None
+
     @nn.compact
     def __call__(self, observations: jnp.ndarray) -> jnp.ndarray:
         assert len(self.features) == len(self.strides)
@@ -77,4 +82,6 @@ class SmallEncoder(nn.Module):
             x = nn.LayerNorm()(x)
             x = nn.tanh(x)
         return x.reshape((*x.shape[:-3], -1))
+
+
 small_configs = {"atari": AtariEncoder, "small": SmallEncoder}

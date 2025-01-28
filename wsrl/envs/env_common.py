@@ -66,12 +66,12 @@ def get_env_type(env_name):
     """
 
     if (
-        "navigate" in env_name or 
-        "stitch" in env_name or 
-        "explore" in env_name or 
-        "cube" in env_name or 
-        "scene" in env_name or 
-        "puzzle" in env_name
+        "navigate" in env_name
+        or "stitch" in env_name
+        or "explore" in env_name
+        or "cube" in env_name
+        or "scene" in env_name
+        or "puzzle" in env_name
     ):
         env_type = "og_bench"
     elif env_name in (
@@ -95,14 +95,20 @@ def get_env_type(env_name):
 def _determine_whether_sparse_reward(env_name):
     # return True if the environment is sparse-reward
     # determine if the env is sparse-reward or not
-    if "maze" in env_name or "cube" in env_name or "scene" in env_name or env_name in [
-        "pen-binary-v0",
-        "door-binary-v0",
-        "relocate-binary-v0",
-        "pen-binary",
-        "door-binary",
-        "relocate-binary",
-    ]:
+    if (
+        "maze" in env_name
+        or "cube" in env_name
+        or "scene" in env_name
+        or env_name
+        in [
+            "pen-binary-v0",
+            "door-binary-v0",
+            "relocate-binary-v0",
+            "pen-binary",
+            "door-binary",
+            "relocate-binary",
+        ]
+    ):
         is_sparse_reward = True
     elif (
         "halfcheetah" in env_name
@@ -180,9 +186,7 @@ def _get_negative_reward(env_name, reward_scale, reward_bias):
             ENV_REWARD_INFO["cube_double"]["reward_neg"] * reward_scale + reward_bias
         )
     elif "scene" in env_name:
-        reward_neg = (
-            ENV_REWARD_INFO["scene"]["reward_neg"] * reward_scale + reward_bias
-        )
+        reward_neg = ENV_REWARD_INFO["scene"]["reward_neg"] * reward_scale + reward_bias
     else:
         raise NotImplementedError(
             """

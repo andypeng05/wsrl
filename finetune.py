@@ -1,12 +1,11 @@
 import os
+import time
 from functools import partial
 
 import gym
 import jax
 import numpy as np
 import tqdm
-import time
-
 from absl import app, flags, logging
 from flax.training import checkpoints
 from ml_collections import config_flags
@@ -17,13 +16,17 @@ from wsrl.common.evaluation import evaluate_with_trajectories
 from wsrl.common.wandb import WandBLogger
 from wsrl.data.replay_buffer import ReplayBuffer, ReplayBufferMC
 from wsrl.envs.adroit_binary_dataset import get_hand_dataset_with_mc_calculation
-from wsrl.envs.og_bench import make_og_bench_env, make_og_bench_datasets, \
-    make_og_bench_datasets_with_mc, choose_og_bench_task_id
 from wsrl.envs.d4rl_dataset import (
     get_d4rl_dataset,
     get_d4rl_dataset_with_mc_calculation,
 )
 from wsrl.envs.env_common import get_env_type, make_gym_env
+from wsrl.envs.og_bench import (
+    choose_og_bench_task_id,
+    make_og_bench_datasets,
+    make_og_bench_datasets_with_mc,
+    make_og_bench_env,
+)
 from wsrl.utils.timer_utils import Timer
 from wsrl.utils.train_utils import concatenate_batches, subsample_batch
 from wsrl.vision import encoders
@@ -64,8 +67,8 @@ flags.DEFINE_integer(
     "warmup_steps", 0, "number of warmup steps (WSRL) before performing online updates"
 )
 
-#validation
-flags.DEFINE_integer('validation_interval', 50_000, 'Validation every n steps')
+# validation
+flags.DEFINE_integer("validation_interval", 50_000, "Validation every n steps")
 
 # agent
 flags.DEFINE_string("agent", "calql", "what RL agent to use")
@@ -149,7 +152,7 @@ def main(_):
     # do not clip adroit actions online following CalQL repo
     # https://github.com/nakamotoo/Cal-QL
     env_type = get_env_type(FLAGS.env)
-    if env_type == 'og_bench':
+    if env_type == "og_bench":
         og_bench_task_id = choose_og_bench_task_id(FLAGS.env)
 
     if env_type == "og_bench":
@@ -162,9 +165,7 @@ def main(_):
             seed=FLAGS.seed,
         )
         eval_env = make_og_bench_env(
-            task_id=og_bench_task_id,
-            env_name=FLAGS.env,
-            seed=FLAGS.seed + 1000
+            task_id=og_bench_task_id, env_name=FLAGS.env, seed=FLAGS.seed + 1000
         )
     else:
         finetune_env = make_gym_env(
@@ -192,7 +193,7 @@ def main(_):
     load dataset
     """
     if env_type == "og_bench":
-        if FLAGS.agent == 'calql':
+        if FLAGS.agent == "calql":
             dataset, val_dataset = make_og_bench_datasets_with_mc(
                 task_id=og_bench_task_id,
                 gamma=FLAGS.config.agent_kwargs.discount,
@@ -239,18 +240,6 @@ def main(_):
                 dataset["rewards"] * FLAGS.reward_scale + FLAGS.reward_bias
             )
         val_dataset = jax.tree_map(lambda x: x[: len(x) // 10], dataset)
-
-    """
-    replay buffer
-    """
-    replay_buffer_type = ReplayBufferMC if FLAGS.agent == "calql" else ReplayBuffer
-    replay_buffer = replay_buffer_type(
-        finetune_env.observation_space,
-        finetune_env.action_space,
-        capacity=FLAGS.replay_buffer_capacity,
-        seed=FLAGS.seed,
-        discount=FLAGS.config.agent_kwargs.discount if FLAGS.agent == "calql" else None,
-    )
 
     """
     Initialize agent
@@ -303,8 +292,10 @@ def main(_):
             eval_info["success_rate"] = np.mean(
                 [any(d["goal_achieved"] for d in t["infos"]) for t in trajs]
             )
-        elif env_type == 'og_bench':
-            eval_info['success_rate'] = np.mean([t['infos'][-1]['success'] for t in trajs])
+        elif env_type == "og_bench":
+            eval_info["success_rate"] = np.mean(
+                [t["infos"][-1]["success"] for t in trajs]
+            )
         elif env_type == "kitchen":
             # kitchen
             eval_info["num_stages_solved"] = np.mean([t["rewards"][-1] for t in trajs])
@@ -336,6 +327,20 @@ def main(_):
             logging.info("Switching to online training")
             is_online_stage = True
 
+            # create replay buffer
+            replay_buffer_type = (
+                ReplayBufferMC if FLAGS.agent == "calql" else ReplayBuffer
+            )
+            replay_buffer = replay_buffer_type(
+                finetune_env.observation_space,
+                finetune_env.action_space,
+                capacity=FLAGS.replay_buffer_capacity,
+                seed=FLAGS.seed,
+                discount=FLAGS.config.agent_kwargs.discount
+                if FLAGS.agent == "calql"
+                else None,
+            )
+
             # upload offline data to online buffer
             if FLAGS.online_sampling_method == "append":
                 offline_dataset_size = dataset["actions"].shape[0]
@@ -353,6 +358,10 @@ def main(_):
                     "use_cql_loss": FLAGS.online_use_cql_loss,
                 }
                 agent.update_config(online_agent_configs)
+
+            # free up memory
+            if FLAGS.offline_data_ratio == 0:
+                del dataset
 
         timer.tick("total")
 
@@ -409,7 +418,11 @@ def main(_):
                         )
                         batch_size_online = FLAGS.batch_size - batch_size_offline
                         online_batch = replay_buffer.sample(batch_size_online)
-                        offline_batch = subsample_batch(dataset, batch_size_offline)
+                        offline_batch = (
+                            subsample_batch(dataset, batch_size_offline)
+                            if batch_size_offline
+                            else subsample_batch(val_dataset, batch_size_offline)
+                        )
                         # update with the combined batch
                         batch = concatenate_batches([online_batch, offline_batch])
                     elif FLAGS.online_sampling_method == "append":
@@ -487,9 +500,9 @@ def main(_):
             if "update_info" in locals():
                 update_info = jax.device_get(update_info)
                 wandb_logger.log({"training": update_info}, step=step)
-                
+
             # check if val_metrics is available
-            if 'val_metrics' in locals():
+            if "val_metrics" in locals():
                 validation_info = jax.device_get(val_metrics)
                 wandb_logger.log({"validation": validation_info}, step=step)
 

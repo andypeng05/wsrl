@@ -7,6 +7,7 @@ import numpy as np
 import ogbench
 from numba import jit
 
+
 def is_og_bench_env(env_name: str) -> bool:
     if "navigate" in env_name:
         return True
@@ -279,7 +280,7 @@ class MazeSingleTaskWrapper(gym.Wrapper):
             options = {}
         options["task_id"] = self.task_id
         return self.env.reset(options=options, *args, **kwargs)
-    
+
     def step(self, action):
         ob, reward, terminated, truncated, info = self.env.step(action)
 
@@ -382,7 +383,7 @@ def maze_convert_to_single_task_dataset(env_name, env, dataset, task_id):
         # antsoccer: 2D position of the ball.
         dists = np.linalg.norm(dataset["observations"][:, 15:17] - goal_xy, axis=-1)
     successes = (dists <= goal_tol).astype(np.float32)
-    dataset["rewards"] = successes - 1.0 # change from 0/1 to -1/0
+    dataset["rewards"] = successes - 1.0  # change from 0/1 to -1/0
     dataset["terminals"] = dataset["dones"] = successes
     dataset["masks"] = 1.0 - successes
 

@@ -14,4 +14,3 @@ python finetune.py \
 --batch_size 1024 \
 --warmup_steps 5000 \
 $@
-
