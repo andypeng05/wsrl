@@ -355,6 +355,35 @@ def get_config(config_string):
                 encoder_kwargs=dict(),
             )
         ),
+
+        "ogbench_sac": ConfigDict(
+            dict(
+                agent_kwargs=get_sac_config(
+                    updates=dict(
+                        policy_kwargs=dict(
+                            tanh_squash_distribution=True,
+                            std_parameterization="uniform",
+                        ),
+                        critic_network_kwargs={
+                            "hidden_dims": [512, 512, 512],
+                            "activations": "relu",
+                            "kernel_scale_final": 1e-2,
+                            "use_layer_norm": True,
+                        },
+                        policy_network_kwargs={
+                            "hidden_dims": [512, 512, 512],
+                            "activations": "relu",
+                            "kernel_scale_final": 1e-2,
+                            "use_layer_norm": True,
+                        },
+                    )
+                ).to_dict(),
+                encoder="small",
+                encoder_kwargs=dict(),
+            )
+        ),
     }
+
+    
 
     return possible_structures[config_string]
