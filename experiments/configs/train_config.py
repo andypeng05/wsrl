@@ -365,13 +365,13 @@ def get_config(config_string):
                             std_parameterization="uniform",
                         ),
                         critic_network_kwargs={
-                            "hidden_dims": [512, 512, 512],
+                            "hidden_dims": [512, 512, 512, 512],
                             "activations": "relu",
                             "kernel_scale_final": 1e-2,
                             "use_layer_norm": True,
                         },
                         policy_network_kwargs={
-                            "hidden_dims": [512, 512, 512],
+                            "hidden_dims": [512, 512, 512, 512],
                             "activations": "relu",
                             "kernel_scale_final": 1e-2,
                             "use_layer_norm": True,

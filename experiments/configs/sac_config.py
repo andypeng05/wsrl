@@ -11,6 +11,7 @@ def get_config(updates=None):
     config.critic_subsample_size = None
     config.autotune_entropy = True
     config.temperature_init = 1.0
+    config.bc_loss_weight = 0.0
 
     # arch
     config.critic_network_kwargs = ConfigDict(
