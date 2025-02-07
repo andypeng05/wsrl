@@ -325,16 +325,16 @@ class SACAgent(flax.struct.PyTreeNode):
         if self.config.get("bc_loss_weight", 0.0) > 0:
             # bc_loss = -action_distributions.log_prob(jnp.clip(batch["actions"], -0.99, 0.99)).mean()
             # try mse loss
-            bc_loss = jnp.square(actions - batch['actions']).sum(axis=-1)
             q_scale = jax.lax.stop_gradient(jnp.abs(predicted_q).mean())
+            mse = jnp.square(actions - batch['actions']).sum(axis=-1) 
+            bc_loss = (mse * q_scale * self.config["bc_loss_weight"]).mean()
 
             info["actor_q_loss"] = actor_loss
             info["bc_loss"] = bc_loss
             info["actor_bc_loss_weight"] = self.config["bc_loss_weight"]
 
             actor_loss = (
-                actor_loss * (1 - self.config["bc_loss_weight"])
-                + bc_loss * self.config["bc_loss_weight"] * q_scale
+                actor_loss + bc_loss
             )
             info["actor_loss"] = actor_loss
 
