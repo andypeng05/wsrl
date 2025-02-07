@@ -173,7 +173,7 @@ def ogbench_dataset_and_calc_mc(
         else:
             # no done signal, all collection-episode is one real episode
             episodes_dict_list.append(episode_data)
-            
+
     # add mc returns to each episode
     for episode_data in episodes_dict_list:
         episode_data["mc_returns"] = calc_return_to_go(
@@ -247,6 +247,12 @@ def make_og_bench_env_and_datasets(
                 manip_convert_to_single_task_dataset(
                     env_name, env, ds, task_id, reward_type="negative"
                 )
+
+        # scale and clip actions
+        env = gymnasium.wrappers.RescaleAction(env, -0.999, 0.999)
+        env = gymnasium.wrappers.ClipAction(env)
+        train_dataset["actions"] = np.clip(train_dataset["actions"], -0.999, 0.999)
+        val_dataset["actions"] = np.clip(val_dataset["actions"], -0.999, 0.999)
 
     else:
         raise ValueError(f"Invalid OG Bench env name: {env_name}")

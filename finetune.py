@@ -121,7 +121,7 @@ def main(_):
         FLAGS.config.agent_kwargs = add_redq_config(FLAGS.config.agent_kwargs)
 
     # TODO: remove
-    time.sleep(FLAGS.seed)
+    time.sleep(FLAGS.seed * 2)
     """
     wandb and logging
     """
