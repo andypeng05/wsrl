@@ -323,7 +323,9 @@ class SACAgent(flax.struct.PyTreeNode):
 
         # optionally add BC regularization
         if self.config.get("bc_loss_weight", 0.0) > 0:
-            bc_loss = -action_distributions.log_prob(batch["actions"]).mean()
+            # bc_loss = -action_distributions.log_prob(jnp.clip(batch["actions"], -0.99, 0.99)).mean()
+            # try mse loss
+            bc_loss = jnp.square(actions - batch['actions']).sum(axis=-1)
             q_scale = jax.lax.stop_gradient(jnp.abs(predicted_q).mean())
 
             info["actor_q_loss"] = actor_loss
