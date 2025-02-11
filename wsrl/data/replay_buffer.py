@@ -183,7 +183,7 @@ class ReplayBufferMC(ReplayBuffer):
         discount: Optional[int] = None,
     ):
         assert discount is not None, "ReplayBufferMC requires a discount factor"
-        super.__init__(dataset_dict, capacity, seed, discount)
+        super().__init__(dataset_dict, capacity, seed, discount)
         mc_returns = np.empty((capacity,), dtype=np.float32)
         self.dataset_dict["mc_returns"] = mc_returns
 
@@ -256,17 +256,17 @@ class ReplayBufferMC(ReplayBuffer):
                 cur_idxs = np.maximum(indx - i, initial_state_idxs)
                 obs.append(
                     jax.tree_util.tree_map(
-                        lambda arr: arr[cur_idxs], self["observations"]
+                        lambda arr: arr[cur_idxs], self.dataset_dict["observations"]
                     )
                 )
                 if i != self.frame_stack - 1:
                     next_obs.append(
                         jax.tree_util.tree_map(
-                            lambda arr: arr[cur_idxs], self["observations"]
+                            lambda arr: arr[cur_idxs], self.dataset_dict["observations"]
                         )
                     )
             next_obs.append(
-                jax.tree_util.tree_map(lambda arr: arr[indx], self["next_observations"])
+                jax.tree_util.tree_map(lambda arr: arr[indx], self.dataset_dict["next_observations"])
             )
 
             batch["observations"] = jax.tree_util.tree_map(

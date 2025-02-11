@@ -167,9 +167,10 @@ def main(_):
             reward_scale=FLAGS.reward_scale,
             reward_bias=FLAGS.reward_bias,
             seed=FLAGS.seed,
+            frame_stack=FLAGS.frame_stack
         )
         eval_env = make_og_bench_env(
-            task_id=og_bench_task_id, env_name=FLAGS.env, seed=FLAGS.seed + 1000
+            task_id=og_bench_task_id, env_name=FLAGS.env, seed=FLAGS.seed + 1000, frame_stack=FLAGS.frame_stack
         )
     else:
         finetune_env = make_gym_env(
@@ -341,9 +342,9 @@ def main(_):
 
             # create replay buffer
             replay_buffer = replay_buffer_type.create_new(
-                finetune_env.observation_space,
-                finetune_env.action_space,
                 capacity=FLAGS.replay_buffer_capacity,
+                observation_space=finetune_env.observation_space,
+                action_space=finetune_env.action_space,
                 seed=FLAGS.seed,
                 discount=FLAGS.config.agent_kwargs.discount
                 if FLAGS.agent == "calql"
