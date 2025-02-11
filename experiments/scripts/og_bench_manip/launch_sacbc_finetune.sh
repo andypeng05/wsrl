@@ -8,7 +8,6 @@ python finetune.py \
 --project ogbench-finetune \
 --num_offline_steps 1000000 \
 --env cube-single-play-v0 \
---config.agent_kwargs.critic_subsample_size 2 \
 --reward_scale 1.0 \
 --reward_bias 0.0 \
 --utd 1 \

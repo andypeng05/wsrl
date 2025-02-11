@@ -14,6 +14,7 @@ from experiments.configs.ensemble_config import add_redq_config
 from wsrl.agents import agents
 from wsrl.common.evaluation import evaluate_with_trajectories
 from wsrl.common.wandb import WandBLogger
+from wsrl.data.dataset import Dataset
 from wsrl.data.replay_buffer import ReplayBuffer, ReplayBufferMC
 from wsrl.envs.adroit_binary_dataset import get_hand_dataset_with_mc_calculation
 from wsrl.envs.d4rl_dataset import (
@@ -34,7 +35,7 @@ from wsrl.vision import encoders
 FLAGS = flags.FLAGS
 
 # env
-flags.DEFINE_string("env", "antmaze-large-diverse-v2", "Environemnt to use")
+flags.DEFINE_string("env", "antmaze-large-diverse-v2", "Environment to use")
 flags.DEFINE_float("reward_scale", 1.0, "Reward scale.")
 flags.DEFINE_float("reward_bias", -1.0, "Reward bias.")
 flags.DEFINE_float(
@@ -66,6 +67,8 @@ flags.DEFINE_bool(
 flags.DEFINE_integer(
     "warmup_steps", 0, "number of warmup steps (WSRL) before performing online updates"
 )
+flags.DEFINE_float("p_aug", None, "Probability of applying image augmentation.")
+flags.DEFINE_integer("frame_stack", None, "Number of frames to stack.")
 
 # validation
 flags.DEFINE_integer("validation_interval", 50_000, "Validation every n steps")
@@ -120,6 +123,7 @@ def main(_):
     if FLAGS.use_redq:
         FLAGS.config.agent_kwargs = add_redq_config(FLAGS.config.agent_kwargs)
 
+    replay_buffer_type = ReplayBufferMC if FLAGS.agent == "calql" else ReplayBuffer
     # TODO: remove
     time.sleep(FLAGS.seed * 2)
     """
@@ -241,6 +245,14 @@ def main(_):
             )
         val_dataset = jax.tree_map(lambda x: x[: len(x) // 10], dataset)
 
+    dataset = Dataset(dataset)
+    val_dataset = Dataset(val_dataset)
+
+    # add optional augmentation
+    for ds in [dataset, val_dataset]:
+        if ds is not None:
+            ds.p_aug = FLAGS.p_aug
+            ds.frame_stack = FLAGS.frame_stack
     """
     Initialize agent
     """
@@ -252,7 +264,7 @@ def main(_):
 
     rng = jax.random.PRNGKey(FLAGS.seed)
     rng, construct_rng = jax.random.split(rng)
-    example_batch = subsample_batch(dataset, FLAGS.batch_size)
+    example_batch = dataset.sample(FLAGS.batch_size)
     agent = agents[FLAGS.agent].create(
         rng=construct_rng,
         observations=example_batch["observations"],
@@ -328,10 +340,7 @@ def main(_):
             is_online_stage = True
 
             # create replay buffer
-            replay_buffer_type = (
-                ReplayBufferMC if FLAGS.agent == "calql" else ReplayBuffer
-            )
-            replay_buffer = replay_buffer_type(
+            replay_buffer = replay_buffer_type.create_new(
                 finetune_env.observation_space,
                 finetune_env.action_space,
                 capacity=FLAGS.replay_buffer_capacity,
@@ -340,11 +349,13 @@ def main(_):
                 if FLAGS.agent == "calql"
                 else None,
             )
+            replay_buffer.p_aug = FLAGS.p_aug
+            replay_buffer.frame_stack = FLAGS.frame_stack
 
             # upload offline data to online buffer
             if FLAGS.online_sampling_method == "append":
-                offline_dataset_size = dataset["actions"].shape[0]
-                dataset_items = dataset.items()
+                offline_dataset_size = len(dataset)
+                dataset_items = dataset.dataset_dict.items()
                 for j in range(offline_dataset_size):
                     transition = {k: v[j] for k, v in dataset_items}
                     replay_buffer.insert(transition)
@@ -397,7 +408,7 @@ def main(_):
         with timer.context("update"):
             # offline updates
             if not is_online_stage:
-                batch = subsample_batch(dataset, FLAGS.batch_size)
+                batch = dataset.sample(FLAGS.batch_size)
                 agent, update_info = agent.update(
                     batch,
                 )
@@ -419,9 +430,9 @@ def main(_):
                         batch_size_online = FLAGS.batch_size - batch_size_offline
                         online_batch = replay_buffer.sample(batch_size_online)
                         offline_batch = (
-                            subsample_batch(dataset, batch_size_offline)
+                            dataset.sample(batch_size_offline)
                             if batch_size_offline
-                            else subsample_batch(val_dataset, batch_size_offline)
+                            else val_dataset.sample(batch_size_offline)
                         )
                         # update with the combined batch
                         batch = concatenate_batches([online_batch, offline_batch])
@@ -477,7 +488,7 @@ def main(_):
         if step % FLAGS.validation_interval == 0:
             logging.info("Validation...")
             with timer.context("validation"):
-                val_batch = subsample_batch(val_dataset, FLAGS.batch_size)
+                val_batch = val_dataset.sample(FLAGS.batch_size)
                 val_metrics = agent.get_debug_metrics(val_batch)
 
         """

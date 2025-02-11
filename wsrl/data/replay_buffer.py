@@ -4,11 +4,18 @@ from typing import Iterable, Optional, Union
 import gym
 import gym.spaces
 import gymnasium
+import jax
 import numpy as np
 from absl import flags
 
 from wsrl.data.dataset import Dataset, DatasetDict, _sample
 from wsrl.envs.env_common import calc_return_to_go
+
+
+def get_size(data):
+    """Return the size of the dataset."""
+    sizes = jax.tree_util.tree_map(lambda arr: len(arr), data)
+    return max(jax.tree_util.tree_leaves(sizes))
 
 
 def _init_replay_dict(
@@ -47,9 +54,21 @@ def _insert_recursively(
 class ReplayBuffer(Dataset):
     def __init__(
         self,
+        dataset_dict: DatasetDict,
+        capacity: int,
+        seed: Optional[int] = None,
+        discount: Optional[int] = None,
+    ):
+        super().__init__(dataset_dict, seed)
+        self._discount = discount
+        self._capacity = capacity
+
+    @classmethod
+    def create_new(
+        cls,
+        capacity: int,
         observation_space: gym.Space,
         action_space: gym.Space,
-        capacity: int,
         next_observation_space: Optional[gym.Space] = None,
         seed: Optional[int] = None,
         discount: Optional[float] = None,
@@ -68,14 +87,40 @@ class ReplayBuffer(Dataset):
             dones=np.empty((capacity,), dtype=np.float32),
         )
 
-        super().__init__(dataset_dict, seed)
+        replay_buffer = cls(dataset_dict, capacity, seed, discount)
+        replay_buffer._size = 0
+        replay_buffer._insert_index = 0
+        replay_buffer._unsampled_indices = None  # for now, only use this when we load
+        return replay_buffer
 
-        self._size = 0
-        self._capacity = capacity
-        self._insert_index = 0
-        self._sequential_index = 0
-        self.unsampled_indices = list(range(self._size))
-        self._discount = discount
+    @classmethod
+    def create_from_initial_dataset(
+        cls,
+        init_dataset: dict,
+        capacity: int,
+        seed: Optional[int] = None,
+        discount: Optional[int] = None,
+    ):
+        """Create a replay buffer from the initial dataset.
+
+        Args:
+            init_dataset: Initial dataset.
+            capacity: Size of the replay buffer.
+        """
+
+        def create_buffer(init_buffer):
+            buffer = np.zeros(
+                (capacity, *init_buffer.shape[1:]), dtype=init_buffer.dtype
+            )
+            buffer[: len(init_buffer)] = init_buffer
+            return buffer
+
+        buffer_dict = jax.tree_util.tree_map(create_buffer, init_dataset)
+        replay_buffer = cls(buffer_dict, capacity, seed, discount)
+        replay_buffer._size = replay_buffer._insert_index = get_size(init_dataset)
+
+        replay_buffer._unsampled_indices = None  # for now, only use this when we load
+        return replay_buffer
 
     def __len__(self) -> int:
         return self._size
@@ -132,23 +177,13 @@ class ReplayBuffer(Dataset):
 class ReplayBufferMC(ReplayBuffer):
     def __init__(
         self,
-        observation_space: gym.Space,
-        action_space: gym.Space,
+        dataset_dict: DatasetDict,
         capacity: int,
-        next_observation_space: Optional[gym.Space] = None,
         seed: Optional[int] = None,
-        discount: Optional[float] = None,
+        discount: Optional[int] = None,
     ):
         assert discount is not None, "ReplayBufferMC requires a discount factor"
-        super().__init__(
-            observation_space,
-            action_space,
-            capacity,
-            next_observation_space,
-            seed,
-            discount,
-        )
-
+        super.__init__(dataset_dict, capacity, seed, discount)
         mc_returns = np.empty((capacity,), dtype=np.float32)
         self.dataset_dict["mc_returns"] = mc_returns
 
@@ -209,4 +244,39 @@ class ReplayBufferMC(ReplayBuffer):
         for k in keys:
             batch[k] = _sample(self.dataset_dict[k], indx)
 
+        if self.frame_stack is not None:
+            # Stack frames.
+            initial_state_idxs = self.initial_locs[
+                np.searchsorted(self.initial_locs, indx, side="right") - 1
+            ]
+            obs = []  # Will be [ob[t - frame_stack + 1], ..., ob[t]].
+            next_obs = []  # Will be [ob[t - frame_stack + 2], ..., ob[t], next_ob[t]].
+            for i in reversed(range(self.frame_stack)):
+                # Use the initial state if the index is out of bounds.
+                cur_idxs = np.maximum(indx - i, initial_state_idxs)
+                obs.append(
+                    jax.tree_util.tree_map(
+                        lambda arr: arr[cur_idxs], self["observations"]
+                    )
+                )
+                if i != self.frame_stack - 1:
+                    next_obs.append(
+                        jax.tree_util.tree_map(
+                            lambda arr: arr[cur_idxs], self["observations"]
+                        )
+                    )
+            next_obs.append(
+                jax.tree_util.tree_map(lambda arr: arr[indx], self["next_observations"])
+            )
+
+            batch["observations"] = jax.tree_util.tree_map(
+                lambda *args: np.concatenate(args, axis=-1), *obs
+            )
+            batch["next_observations"] = jax.tree_util.tree_map(
+                lambda *args: np.concatenate(args, axis=-1), *next_obs
+            )
+        if self.p_aug is not None:
+            # Apply random-crop image augmentation.
+            if np.random.rand() < self.p_aug:
+                self.augment(batch, ["observations", "next_observations"])
         return batch

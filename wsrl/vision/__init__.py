@@ -1,4 +1,4 @@
-from wsrl.vision.small_encoders import small_configs
+from wsrl.vision.encoders import configs
 
 encoders = dict()
-encoders.update(small_configs)
+encoders.update(configs)

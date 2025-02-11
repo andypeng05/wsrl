@@ -186,7 +186,6 @@ def ogbench_dataset_and_calc_mc(
             infinite_horizon,
         )
 
-
     return concatenate_batches(episodes_dict_list)
 
 

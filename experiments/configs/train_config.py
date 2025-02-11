@@ -303,7 +303,7 @@ def get_config(config_string):
                         cql_alpha=5.0,
                     )
                 ).to_dict(),
-                encoder="small",
+                encoder="impala",
                 encoder_kwargs=dict(),
             )
         ),
@@ -324,7 +324,7 @@ def get_config(config_string):
                         temperature=10.0,
                     )
                 ).to_dict(),
-                encoder="small",
+                encoder="impala",
                 encoder_kwargs=dict(),
             )
         ),
@@ -338,20 +338,20 @@ def get_config(config_string):
                             std_parameterization="uniform",
                         ),
                         critic_network_kwargs={
-                            "hidden_dims": [512, 512, 512],
+                            "hidden_dims": [512, 512, 512, 512],
                             "activations": "relu",
                             "kernel_scale_final": 1e-2,
                             "use_layer_norm": True,
                         },
                         policy_network_kwargs={
-                            "hidden_dims": [512, 512, 512],
+                            "hidden_dims": [512, 512, 512, 512],
                             "activations": "relu",
                             "kernel_scale_final": 1e-2,
                             "use_layer_norm": True,
                         },
                     )
                 ).to_dict(),
-                encoder="small",
+                encoder="impala",
                 encoder_kwargs=dict(),
             )
         ),
@@ -378,12 +378,12 @@ def get_config(config_string):
                         },
                     )
                 ).to_dict(),
-                encoder="small",
+                encoder="impala",
                 encoder_kwargs=dict(),
             )
         ),
     }
 
-    
+
 
     return possible_structures[config_string]

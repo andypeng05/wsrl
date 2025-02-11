@@ -1,9 +1,10 @@
 from collections.abc import Mapping
-from absl import flags
 
 import numpy as np
+from absl import flags
 
 FLAGS = flags.FLAGS
+
 
 def concatenate_batches(batches):
     concatenated = {}
@@ -12,7 +13,7 @@ def concatenate_batches(batches):
             # to concatenate batch["observations"]["image"], etc.
             concatenated[key] = concatenate_batches([batch[key] for batch in batches])
         else:
-            if 'observation' in key and 'visual' in FLAGS.env:
+            if "observation" in key and "visual" in FLAGS.env:
                 concatenated[key] = np.concatenate(
                     [batch[key] for batch in batches], axis=0
                 ).astype(np.uint8)
