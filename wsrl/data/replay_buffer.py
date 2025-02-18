@@ -266,7 +266,9 @@ class ReplayBufferMC(ReplayBuffer):
                         )
                     )
             next_obs.append(
-                jax.tree_util.tree_map(lambda arr: arr[indx], self.dataset_dict["next_observations"])
+                jax.tree_util.tree_map(
+                    lambda arr: arr[indx], self.dataset_dict["next_observations"]
+                )
             )
 
             batch["observations"] = jax.tree_util.tree_map(

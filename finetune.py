@@ -167,10 +167,13 @@ def main(_):
             reward_scale=FLAGS.reward_scale,
             reward_bias=FLAGS.reward_bias,
             seed=FLAGS.seed,
-            frame_stack=FLAGS.frame_stack
+            frame_stack=FLAGS.frame_stack,
         )
         eval_env = make_og_bench_env(
-            task_id=og_bench_task_id, env_name=FLAGS.env, seed=FLAGS.seed + 1000, frame_stack=FLAGS.frame_stack
+            task_id=og_bench_task_id,
+            env_name=FLAGS.env,
+            seed=FLAGS.seed + 1000,
+            frame_stack=FLAGS.frame_stack,
         )
     else:
         finetune_env = make_gym_env(
@@ -331,7 +334,6 @@ def main(_):
     is_online_stage = False
     observation, info = finetune_env.reset()
     done = False  # env done signal
-
     for _ in tqdm.tqdm(range(step, FLAGS.num_offline_steps + FLAGS.num_online_steps)):
         """
         Switch from offline to online
@@ -351,7 +353,7 @@ def main(_):
                 else None,
             )
             replay_buffer.p_aug = FLAGS.p_aug
-            replay_buffer.frame_stack = FLAGS.frame_stack
+            # replay_buffer.frame_stack = FLAGS.frame_stack // no double stack
 
             # upload offline data to online buffer
             if FLAGS.online_sampling_method == "append":
