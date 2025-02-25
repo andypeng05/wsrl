@@ -29,7 +29,7 @@ from wsrl.envs.og_bench import (
     make_og_bench_env,
 )
 from wsrl.utils.timer_utils import Timer
-from wsrl.utils.train_utils import concatenate_batches, subsample_batch
+from wsrl.utils.train_utils import concatenate_batches, subsample_batch, sac_policy_loader
 from wsrl.vision import encoders
 
 FLAGS = flags.FLAGS
@@ -102,6 +102,7 @@ flags.DEFINE_string("project", None, "Wandb project folder")
 flags.DEFINE_string("group", None, "Wandb group of the experiment")
 flags.DEFINE_bool("debug", False, "If true, no logging to wandb")
 
+flags.DEFINE_bool("load_policy_only", False, "only load the pretrained policy not q function")
 config_flags.DEFINE_config_file(
     "config",
     None,
@@ -279,8 +280,11 @@ def main(_):
 
     if FLAGS.resume_path != "":
         assert os.path.exists(FLAGS.resume_path), "resume path does not exist"
-        agent = checkpoints.restore_checkpoint(FLAGS.resume_path, target=agent)
-
+        if FLAGS.load_policy_only:
+            agent = sac_policy_loader(agent, FLAGS.resume_path)
+        else:
+            agent = checkpoints.restore_checkpoint(FLAGS.resume_path, target=agent)
+    import pdb; pdb.set_trace()
     """
     eval function
     """
