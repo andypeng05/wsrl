@@ -90,7 +90,7 @@ flags.DEFINE_string(
 flags.DEFINE_string("resume_path", "", "Path to resume from")
 flags.DEFINE_integer("log_interval", 5_000, "Log every n steps")
 flags.DEFINE_integer("eval_interval", 20_000, "Evaluate every n steps")
-flags.DEFINE_integer("save_interval", 100_000, "Save every n steps.")
+flags.DEFINE_integer("save_interval", 500_000, "Save every n steps.")
 flags.DEFINE_integer(
     "n_eval_trajs", 20, "Number of trajectories to use for each evaluation."
 )
