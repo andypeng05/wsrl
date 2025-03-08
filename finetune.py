@@ -125,7 +125,7 @@ def main(_):
     if FLAGS.use_redq:
         FLAGS.config.agent_kwargs = add_redq_config(FLAGS.config.agent_kwargs)
 
-    replay_buffer_type = ReplayBufferMC if FLAGS.agent == "calql" else ReplayBuffer
+    replay_buffer_type = ReplayBufferMC if FLAGS.agent in ("calql", "mca") else ReplayBuffer
     # TODO: remove
     time.sleep(FLAGS.seed * 2)
     """
@@ -194,7 +194,7 @@ def main(_):
         )
 
     min_steps_to_update = FLAGS.batch_size * (1 - FLAGS.offline_data_ratio)
-    if FLAGS.agent == "calql":
+    if FLAGS.agent in ("calql", "mca"):
         min_steps_to_update = max(
             min_steps_to_update, finetune_env.spec.max_episode_steps
         )
@@ -203,7 +203,7 @@ def main(_):
     load dataset
     """
     if env_type == "og_bench":
-        if FLAGS.agent == "calql":
+        if FLAGS.agent == "calql" or FLAGS.agent == "mca":
             dataset, val_dataset = make_og_bench_datasets_with_mc(
                 task_id=og_bench_task_id,
                 gamma=FLAGS.config.agent_kwargs.discount,
@@ -230,7 +230,7 @@ def main(_):
         )
         val_dataset = jax.tree_map(lambda x: x[: len(x) // 10], dataset)
     else:
-        if FLAGS.agent == "calql":
+        if FLAGS.agent == "calql" or FLAGS.agent == "mca":
             # need dataset with mc return
             dataset = get_d4rl_dataset_with_mc_calculation(
                 FLAGS.env,
@@ -285,7 +285,7 @@ def main(_):
         # loader type
         if "iql" in FLAGS.resume_path:
             loader_type = "iql"
-        elif "sac" in FLAGS.resume_path or "calql" in FLAGS.resume_path or "cql" in FLAGS.resume_path:
+        elif "sac" in FLAGS.resume_path or "calql" in FLAGS.resume_path or "cql" in FLAGS.resume_path or "mca" in FLAGS.resume_path:
             loader_type = "sac"
             
         if FLAGS.load_policy_only and FLAGS.load_value_only:
@@ -365,7 +365,7 @@ def main(_):
                 action_space=finetune_env.action_space,
                 seed=FLAGS.seed,
                 discount=FLAGS.config.agent_kwargs.discount
-                if FLAGS.agent == "calql"
+                if FLAGS.agent in ("calql", "mca")
                 else None,
             )
             replay_buffer.p_aug = FLAGS.p_aug
