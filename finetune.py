@@ -29,7 +29,7 @@ from wsrl.envs.og_bench import (
     make_og_bench_env,
 )
 from wsrl.utils.timer_utils import Timer
-from wsrl.utils.train_utils import concatenate_batches, subsample_batch, sac_policy_loader
+from wsrl.utils.train_utils import concatenate_batches, subsample_batch, pretrained_loaders
 from wsrl.vision import encoders
 
 FLAGS = flags.FLAGS
@@ -95,6 +95,8 @@ flags.DEFINE_integer(
     "n_eval_trajs", 20, "Number of trajectories to use for each evaluation."
 )
 flags.DEFINE_bool("deterministic_eval", True, "Whether to use deterministic evaluation")
+flags.DEFINE_bool("load_policy_only", False, "only load the policy from checkpoint")
+flags.DEFINE_bool("load_value_only", False, "only load the value function from checkpoint")
 
 # wandb
 flags.DEFINE_string("exp_name", "", "Experiment name for wandb logging")
@@ -102,7 +104,6 @@ flags.DEFINE_string("project", None, "Wandb project folder")
 flags.DEFINE_string("group", None, "Wandb group of the experiment")
 flags.DEFINE_bool("debug", False, "If true, no logging to wandb")
 
-flags.DEFINE_bool("load_policy_only", False, "only load the pretrained policy not q function")
 config_flags.DEFINE_config_file(
     "config",
     None,
@@ -280,11 +281,22 @@ def main(_):
 
     if FLAGS.resume_path != "":
         assert os.path.exists(FLAGS.resume_path), "resume path does not exist"
-        if FLAGS.load_policy_only:
-            agent = sac_policy_loader(agent, FLAGS.resume_path)
+
+        # loader type
+        if "iql" in FLAGS.resume_path:
+            loader_type = "iql"
+        elif "sac" in FLAGS.resume_path or "calql" in FLAGS.resume_path or "cql" in FLAGS.resume_path:
+            loader_type = "sac"
+            
+        if FLAGS.load_policy_only and FLAGS.load_value_only:
+            agent = checkpoints.restore_checkpoint(FLAGS.resume_path, target=agent)
+        elif FLAGS.load_policy_only:
+            agent = pretrained_loaders[f"{loader_type}_policy_loader"](agent, FLAGS.resume_path)
+        elif FLAGS.load_value_only:
+            agent = pretrained_loaders[f"{loader_type}_value_loader"](agent, FLAGS.resume_path)
         else:
             agent = checkpoints.restore_checkpoint(FLAGS.resume_path, target=agent)
-    import pdb; pdb.set_trace()
+
     """
     eval function
     """

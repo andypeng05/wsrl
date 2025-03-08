@@ -104,3 +104,134 @@ def sac_policy_loader(agent, checkpoint_path):
         )
     )
     return agent
+
+
+def sac_value_loader(agent, checkpoint_path):
+    # unfreeze the params from target agent
+    params = agent.state.params
+    target_params = agent.state.target_params
+
+    # restore from checkpoint
+    restored_agent = checkpoints.restore_checkpoint(checkpoint_path, target=None)
+    all_keys = restored_agent["state"]["params"]["modules_critic"].keys()
+    if FLAGS.not_load_value_last_layer:
+        # not load the 'Dense_0' key
+        keys_to_load = ("network",)
+    elif FLAGS.not_load_value_last_bias:
+        keys_to_load = ("network", "Dense_0/kernel")
+    else:
+        keys_to_load = tuple(all_keys)
+        assert "network" in all_keys
+        assert "Dense_0" in all_keys
+    for k in keys_to_load:
+        if "/" in k:
+            # nested keys
+            high_k, low_k = k.split("/")
+            params["modules_critic"][high_k][low_k] = restored_agent["state"]["params"][
+                "modules_critic"
+            ][high_k][low_k]
+            target_params["modules_critic"][high_k][low_k] = restored_agent["state"][
+                "target_params"
+            ]["modules_critic"][high_k][low_k]
+        else:
+            params["modules_critic"][k] = restored_agent["state"]["params"][
+                "modules_critic"
+            ][k]
+            target_params["modules_critic"][k] = restored_agent["state"][
+                "target_params"
+            ]["modules_critic"][k]
+
+    # restore optimizer states
+    opt_states = dict(agent.state.opt_states)  # hard-copy
+    opt_states["critic"] = restored_agent["state"]["opt_states"]["critic"]
+    opt_states = restore_optimizer_state(agent.state.opt_states, opt_states)
+
+    # put the params back into the agent
+    agent = agent.replace(
+        state=agent.state.replace(
+            params=params,
+            target_params=target_params,
+            step=restored_agent["state"]["step"],
+            opt_states=opt_states,
+        )
+    )
+    return agent
+
+
+def iql_policy_loader(agent, checkpoint_path):
+    # unfreeze the params from target agent
+    params = agent.state.params
+    target_params = agent.state.target_params
+
+    # restore from checkpoint
+    restored_agent = checkpoints.restore_checkpoint(checkpoint_path, target=None)
+    params["modules_actor"] = restored_agent["state"]["params"]["modules_actor"]
+    target_params["modules_actor"] = restored_agent["state"]["target_params"][
+        "modules_actor"
+    ]
+
+    # params = agent.state.params.copy(
+    #     add_or_replace={
+    #         "modules_actor":restored_agent["state"]["params"]["modules_actor"],
+    #     }
+    # )
+    # target_params = agent.state.target_params.copy(
+    #     add_or_replace={
+    #         "modules_actor":restored_agent["state"]["target_params"]["modules_actor"],
+    #     }
+    # )
+
+    # put the params back into the agent
+    agent = agent.replace(
+        state=agent.state.replace(
+            params=params,
+            target_params=target_params,
+            step=restored_agent["state"]["step"],
+        )
+    )
+    return agent
+
+
+def iql_value_loader(agent, checkpoint_path):
+    # unfreeze the params from target agent
+    params = agent.state.params
+    target_params = agent.state.target_params
+
+    # restore from checkpoint
+    restored_agent = checkpoints.restore_checkpoint(checkpoint_path, target=None)
+    params["modules_critic"] = restored_agent["state"]["params"]["modules_critic"]
+    target_params["modules_critic"] = restored_agent["state"]["target_params"][
+        "modules_critic"
+    ]
+    params["modules_value"] = restored_agent["state"]["params"]["modules_value"]
+    target_params["modules_value"] = restored_agent["state"]["target_params"][
+        "modules_value"
+    ]
+
+    # put the params back into the agent
+    agent = agent.replace(
+        state=agent.state.replace(
+            params=params,
+            target_params=target_params,
+            step=restored_agent["state"]["step"],
+        )
+    )
+    return agent
+
+
+def step_loader(agent, checkpoint_path):
+    # only restore the step
+    restored_agent = checkpoints.restore_checkpoint(checkpoint_path, target=None)
+    agent = agent.replace(
+        state=agent.state.replace(step=restored_agent["state"]["step"])
+    )
+    return agent
+
+
+pretrained_loaders = dict(
+    sac_policy_loader=sac_policy_loader,
+    sac_value_loader=sac_value_loader,
+    iql_policy_loader=iql_policy_loader,
+    iql_value_loader=iql_value_loader,
+    step_loader=step_loader,
+)

@@ -463,7 +463,7 @@ class SACAgent(flax.struct.PyTreeNode):
         actions: jnp.ndarray,
         # Model architecture
         encoder_def: nn.Module,
-        shared_encoder: bool = True,
+        shared_encoder: bool = False,
         critic_network_kwargs: dict = {
             "hidden_dims": [256, 256],
         },

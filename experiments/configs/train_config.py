@@ -289,16 +289,16 @@ def get_config(config_string):
                             tanh_squash_distribution=True,
                             std_parameterization="uniform",
                         ),
-                        critic_network_kwargs={
-                            "hidden_dims": [512, 512, 512, 512],
-                            "activations": "relu",
-                            "kernel_scale_final": 1e-2,
-                        },
-                        policy_network_kwargs={
-                            "hidden_dims": [512, 512, 512, 512],
-                            "activations": "relu",
-                            "kernel_scale_final": 1e-2,
-                        },
+                        critic_network_kwargs=dict(
+                            hidden_dims=[512, 512, 512, 512],
+                            activations="relu",
+                            kernel_scale_final=1e-2,
+                        ),
+                        policy_network_kwargs=dict(
+                            hidden_dims=[512, 512, 512, 512],
+                            activations="relu",
+                            kernel_scale_final=1e-2,
+                        ),
                         online_cql_alpha=5.0,
                         cql_alpha=5.0,
                     )
@@ -312,13 +312,19 @@ def get_config(config_string):
             dict(
                 agent_kwargs=get_iql_config(
                     updates=dict(
+                        policy_kwargs=dict(
+                            tanh_squash_distribution=True,
+                            std_parameterization="uniform",
+                        ),
                         policy_network_kwargs=dict(
-                            hidden_dims=(256, 256),
+                            hidden_dims=[512, 512, 512, 512],
                             activations="relu",
+                            kernel_scale_final=1e-2,
                         ),
                         critic_network_kwargs=dict(
-                            hidden_dims=(256, 256),
+                            hidden_dims=[512, 512, 512, 512],
                             activations="relu",
+                            kernel_scale_final=1e-2,
                         ),
                         expectile=0.9,
                         temperature=10.0,
