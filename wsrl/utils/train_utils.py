@@ -11,7 +11,15 @@ import optax
 
 
 FLAGS = flags.FLAGS
-
+# only one of the following should be set to true
+flags.DEFINE_bool(
+    "not_load_value_last_layer",
+    False,
+    "don't load the last layer of the value function",
+)
+flags.DEFINE_bool(
+    "not_load_value_last_bias", False, "don't load the last bias of the value function"
+)
 
 def concatenate_batches(batches):
     concatenated = {}
