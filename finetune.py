@@ -31,7 +31,7 @@ from wsrl.envs.og_bench import (
 )
 from wsrl.utils.timer_utils import Timer
 from wsrl.utils.train_utils import concatenate_batches, subsample_batch, pretrained_loaders
-from wsrl.utils.visualization_utils import value_and_reward_visulization
+from wsrl.utils.visualization_utils import mc_q_visualization
 from wsrl.vision import encoders
 
 FLAGS = flags.FLAGS
@@ -72,8 +72,6 @@ flags.DEFINE_integer(
 flags.DEFINE_float("p_aug", None, "Probability of applying image augmentation.")
 flags.DEFINE_integer("frame_stack", None, "Number of frames to stack.")
 
-# validation
-flags.DEFINE_integer("validation_interval", 50_000, "Validation every n steps")
 
 # agent
 flags.DEFINE_string("agent", "calql", "what RL agent to use")
@@ -93,13 +91,14 @@ flags.DEFINE_string("resume_path", "", "Path to resume from")
 flags.DEFINE_integer("log_interval", 5_000, "Log every n steps")
 flags.DEFINE_integer("eval_interval", 20_000, "Evaluate every n steps")
 flags.DEFINE_integer("save_interval", 500_000, "Save every n steps.")
+flags.DEFINE_integer("validation_interval", 50_000, "Validation every n steps")
 flags.DEFINE_integer(
     "n_eval_trajs", 20, "Number of trajectories to use for each evaluation."
 )
 flags.DEFINE_bool("deterministic_eval", True, "Whether to use deterministic evaluation")
 flags.DEFINE_bool("load_policy_only", False, "only load the policy from checkpoint")
 flags.DEFINE_bool("load_value_only", False, "only load the value function from checkpoint")
-
+flags.DEFINE_bool("visualize_q", False, "Plot Q values over a trajectory")
 # wandb
 flags.DEFINE_string("exp_name", "", "Experiment name for wandb logging")
 flags.DEFINE_string("project", None, "Wandb project folder")
@@ -234,13 +233,15 @@ def main(_):
     else:
         if FLAGS.agent == "calql" or FLAGS.agent == "mca":
             # need dataset with mc return
-            dataset = get_d4rl_dataset_with_mc_calculation(
+            traj_dataset, dataset = get_d4rl_dataset_with_mc_calculation(
                 FLAGS.env,
                 reward_scale=FLAGS.reward_scale,
                 reward_bias=FLAGS.reward_bias,
                 clip_action=FLAGS.clip_action,
                 gamma=FLAGS.config.agent_kwargs.discount,
             )
+            if not FLAGS.visualize_q:
+                del traj_dataset
         else:
             dataset = get_d4rl_dataset(
                 FLAGS.env,
@@ -309,6 +310,7 @@ def main(_):
         eval_func,
         step_number,
         wandb_logger,
+        offline_dataset,
         n_eval_trajs=FLAGS.n_eval_trajs,
     ):
         stats, trajs = eval_func(
@@ -343,11 +345,13 @@ def main(_):
             )
 
         wandb_logger.log({"evaluation": eval_info}, step=step_number)
-        if FLAGS.agent == "mca":
-             wandb_logger.log(
+        if step_number == FLAGS.num_offline_steps and FLAGS.visualize_q:
+            idx = np.random.randint(len(offline_dataset), size=FLAGS.n_eval_trajs)
+            offline_trajs = [offline_dataset[i] for i in idx]
+            wandb_logger.log(
                 {
                     "evaluation_visualization": wandb.Image(
-                        value_and_reward_visulization(trajs, agent)
+                        mc_q_visualization(offline_trajs, agent)
                     )
                 }, step=step_number
             )
@@ -511,6 +515,7 @@ def main(_):
                     eval_func=eval_func,
                     step_number=step,
                     wandb_logger=wandb_logger,
+                    offline_dataset=traj_dataset,
                 )
 
         """Validation"""

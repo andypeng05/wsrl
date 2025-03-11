@@ -218,6 +218,29 @@ def get_config(config_string):
             )
         ),
 
+        "kitchen_sac": ConfigDict(
+            dict(
+                agent_kwargs=get_sac_config(
+                    updates=dict(
+                        policy_kwargs=dict(
+                            tanh_squash_distribution=True,
+                            std_parameterization="exp",
+                        ),
+                        critic_network_kwargs={
+                            "hidden_dims": [512, 512, 512],
+                            "activations": "relu",
+                            "use_layer_norm": True,
+                        },
+                        policy_network_kwargs={
+                            "hidden_dims": [512, 512, 512],
+                            "activations": "relu",
+                            "use_layer_norm": True,
+                        },
+                    )
+                ).to_dict(),
+            )
+        ),
+
         ########################################################
         #                  locomotion configs                  #
         ########################################################

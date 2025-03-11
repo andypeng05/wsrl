@@ -149,7 +149,7 @@ def get_d4rl_dataset(
 def get_d4rl_dataset_with_mc_calculation(
     env_name, reward_scale, reward_bias, clip_action, gamma
 ):
-    dataset = qlearning_dataset_and_calc_mc(
+    trajs, dataset = qlearning_dataset_and_calc_mc(
         gym.make(env_name).unwrapped,
         reward_scale,
         reward_bias,
@@ -157,7 +157,7 @@ def get_d4rl_dataset_with_mc_calculation(
         gamma,
     )
 
-    return dict(
+    return trajs, dict(
         observations=dataset["observations"],
         actions=dataset["actions"],
         next_observations=dataset["next_observations"],
@@ -250,4 +250,4 @@ def qlearning_dataset_and_calc_mc(
             )
             episodes_dict_list.append(episode_data)
             data_ = collections.defaultdict(list)
-    return concatenate_batches(episodes_dict_list)
+    return episodes_dict_list, concatenate_batches(episodes_dict_list)
