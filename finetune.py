@@ -6,6 +6,7 @@ import gym
 import jax
 import numpy as np
 import tqdm
+import wandb
 from absl import app, flags, logging
 from flax.training import checkpoints
 from ml_collections import config_flags
@@ -30,6 +31,7 @@ from wsrl.envs.og_bench import (
 )
 from wsrl.utils.timer_utils import Timer
 from wsrl.utils.train_utils import concatenate_batches, subsample_batch, pretrained_loaders
+from wsrl.utils.visualization_utils import value_and_reward_visulization
 from wsrl.vision import encoders
 
 FLAGS = flags.FLAGS
@@ -341,6 +343,14 @@ def main(_):
             )
 
         wandb_logger.log({"evaluation": eval_info}, step=step_number)
+        if FLAGS.agent == "mca":
+             wandb_logger.log(
+                {
+                    "evaluation_visualization": wandb.Image(
+                        value_and_reward_visulization(trajs, agent)
+                    )
+                }, step=step_number
+            )
 
     """
     training loop
