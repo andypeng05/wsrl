@@ -12,5 +12,5 @@ python finetune.py \
 --utd 1 \
 --batch_size 256 \
 --warmup_steps 5000 \
---num_offline_steps 1000000 \
+--num_offline_steps 250000 \
 $@

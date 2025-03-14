@@ -310,7 +310,7 @@ def main(_):
         eval_func,
         step_number,
         wandb_logger,
-        offline_dataset,
+        offline_dataset=None,
         n_eval_trajs=FLAGS.n_eval_trajs,
     ):
         stats, trajs = eval_func(
@@ -515,7 +515,7 @@ def main(_):
                     eval_func=eval_func,
                     step_number=step,
                     wandb_logger=wandb_logger,
-                    offline_dataset=traj_dataset,
+                    offline_dataset=traj_dataset if FLAGS.visualize_q else None,
                 )
 
         """Validation"""
