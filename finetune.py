@@ -88,6 +88,8 @@ flags.DEFINE_string(
     "Directory to save the logs and checkpoints",
 )
 flags.DEFINE_string("resume_path", "", "Path to resume from")
+flags.DEFINE_string("separate_resume_path", "", "Policy and critic paths to resume from, comma separated")
+
 flags.DEFINE_integer("log_interval", 5_000, "Log every n steps")
 flags.DEFINE_integer("eval_interval", 20_000, "Evaluate every n steps")
 flags.DEFINE_integer("save_interval", 500_000, "Save every n steps.")
@@ -299,6 +301,20 @@ def main(_):
             agent = pretrained_loaders[f"{loader_type}_value_loader"](agent, FLAGS.resume_path)
         else:
             agent = checkpoints.restore_checkpoint(FLAGS.resume_path, target=agent)
+
+    elif FLAGS.separate_resume_path != "" :
+        policy_resume_path, critic_resume_path = FLAGS.separate_resume_path.split(',')
+        assert os.path.exists(policy_resume_path), "resume path does not exist"
+        assert os.path.exists(critic_resume_path), "critic resume path does not exist"
+
+        # assumes same type for policy and critic
+        if "iql" in policy_resume_path:
+            loader_type = "iql"
+        elif "sac" in policy_resume_path or "calql" in policy_resume_path or "cql" in policy_resume_path or "mca" in policy_resume_path:
+            loader_type = "sac"
+
+        agent = pretrained_loaders[f"{loader_type}_policy_loader"](agent, policy_resume_path)
+        agent = pretrained_loaders[f"{loader_type}_value_loader"](agent, critic_resume_path)
 
     """
     eval function
