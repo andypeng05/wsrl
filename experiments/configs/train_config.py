@@ -50,6 +50,32 @@ def get_config(config_string):
             )
         ),
 
+        "antmaze_sac": ConfigDict(
+            dict(
+                agent_kwargs=get_sac_config(
+                    updates=dict(
+                        policy_kwargs=dict(
+                            tanh_squash_distribution=True,
+                            std_parameterization="uniform",
+                        ),
+                        critic_network_kwargs={
+                            "hidden_dims": [256, 256, 256, 256],
+                            "activations": "relu",
+                            "kernel_scale_final": 1e-2,
+                            "use_layer_norm": True,
+                        },
+                        policy_network_kwargs={
+                            "hidden_dims": [256, 256],
+                            "activations": "relu",
+                            "kernel_scale_final": 1e-2,
+                            "use_layer_norm": True,
+                        },
+                        max_target_backup=True,
+                    )
+                ).to_dict(),
+            )
+        ),
+
         "antmaze_wsrl": ConfigDict(
             dict(
                 agent_kwargs=get_wsrl_config(

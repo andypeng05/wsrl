@@ -11,6 +11,5 @@ python finetune.py \
 --reward_bias -4.0 \
 --utd 1 \
 --batch_size 256 \
---warmup_steps 5000 \
 --num_offline_steps 250000 \
 $@
