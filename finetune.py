@@ -30,7 +30,11 @@ from wsrl.envs.og_bench import (
     make_og_bench_env,
 )
 from wsrl.utils.timer_utils import Timer
-from wsrl.utils.train_utils import concatenate_batches, subsample_batch, pretrained_loaders
+from wsrl.utils.train_utils import (
+    concatenate_batches,
+    pretrained_loaders,
+    subsample_batch,
+)
 from wsrl.utils.visualization_utils import mc_q_visualization
 from wsrl.vision import encoders
 
@@ -88,7 +92,11 @@ flags.DEFINE_string(
     "Directory to save the logs and checkpoints",
 )
 flags.DEFINE_string("resume_path", "", "Path to resume from")
-flags.DEFINE_string("separate_resume_path", "", "Policy and critic paths to resume from, comma separated")
+flags.DEFINE_string(
+    "separate_resume_path",
+    "",
+    "Policy and critic paths to resume from, comma separated",
+)
 
 flags.DEFINE_integer("log_interval", 5_000, "Log every n steps")
 flags.DEFINE_integer("eval_interval", 20_000, "Evaluate every n steps")
@@ -98,8 +106,10 @@ flags.DEFINE_integer(
     "n_eval_trajs", 20, "Number of trajectories to use for each evaluation."
 )
 flags.DEFINE_bool("deterministic_eval", True, "Whether to use deterministic evaluation")
-flags.DEFINE_bool("load_policy_only", False, "only load the policy from checkpoint")
-flags.DEFINE_bool("load_value_only", False, "only load the value function from checkpoint")
+flags.DEFINE_bool("load_policy_only", True, "only load the policy from checkpoint")
+flags.DEFINE_bool(
+    "load_value_only", True, "only load the value function from checkpoint"
+)
 flags.DEFINE_bool("visualize_q", False, "Plot Q values over a trajectory")
 # wandb
 flags.DEFINE_string("exp_name", "", "Experiment name for wandb logging")
@@ -128,7 +138,9 @@ def main(_):
     if FLAGS.use_redq:
         FLAGS.config.agent_kwargs = add_redq_config(FLAGS.config.agent_kwargs)
 
-    replay_buffer_type = ReplayBufferMC if FLAGS.agent in ("calql", "mca") else ReplayBuffer
+    replay_buffer_type = (
+        ReplayBufferMC if FLAGS.agent in ("calql", "mca") else ReplayBuffer
+    )
     # TODO: remove
     time.sleep(FLAGS.seed * 2)
     """
@@ -137,7 +149,7 @@ def main(_):
     wandb_config = WandBLogger.get_default_config()
     wandb_config.update(
         {
-            "project": "wsrl" or FLAGS.project,
+            "project": "ogbench-finetune" or FLAGS.project,
             "group": "wsrl" or FLAGS.group,
             "exp_descriptor": f"{FLAGS.exp_name}_{FLAGS.env}_{FLAGS.agent}_seed{FLAGS.seed}",
         }
@@ -290,31 +302,49 @@ def main(_):
         # loader type
         if "iql" in FLAGS.resume_path:
             loader_type = "iql"
-        elif "sac" in FLAGS.resume_path or "calql" in FLAGS.resume_path or "cql" in FLAGS.resume_path or "mca" in FLAGS.resume_path:
+        elif (
+            "sac" in FLAGS.resume_path
+            or "calql" in FLAGS.resume_path
+            or "cql" in FLAGS.resume_path
+            or "mca" in FLAGS.resume_path
+        ):
             loader_type = "sac"
-            
+
         if FLAGS.load_policy_only and FLAGS.load_value_only:
             agent = checkpoints.restore_checkpoint(FLAGS.resume_path, target=agent)
         elif FLAGS.load_policy_only:
-            agent = pretrained_loaders[f"{loader_type}_policy_loader"](agent, FLAGS.resume_path)
+            agent = pretrained_loaders[f"{loader_type}_policy_loader"](
+                agent, FLAGS.resume_path
+            )
         elif FLAGS.load_value_only:
-            agent = pretrained_loaders[f"{loader_type}_value_loader"](agent, FLAGS.resume_path)
+            agent = pretrained_loaders[f"{loader_type}_value_loader"](
+                agent, FLAGS.resume_path
+            )
         else:
-            agent = checkpoints.restore_checkpoint(FLAGS.resume_path, target=agent)
+            agent = pretrained_loaders["step_loader"](agent, FLAGS.resume_path)
 
-    elif FLAGS.separate_resume_path != "" :
-        policy_resume_path, critic_resume_path = FLAGS.separate_resume_path.split(',')
+    elif FLAGS.separate_resume_path != "":
+        policy_resume_path, critic_resume_path = FLAGS.separate_resume_path.split(",")
         assert os.path.exists(policy_resume_path), "resume path does not exist"
         assert os.path.exists(critic_resume_path), "critic resume path does not exist"
 
         # assumes same type for policy and critic
         if "iql" in policy_resume_path:
             loader_type = "iql"
-        elif "sac" in policy_resume_path or "calql" in policy_resume_path or "cql" in policy_resume_path or "mca" in policy_resume_path:
+        elif (
+            "sac" in policy_resume_path
+            or "calql" in policy_resume_path
+            or "cql" in policy_resume_path
+            or "mca" in policy_resume_path
+        ):
             loader_type = "sac"
 
-        agent = pretrained_loaders[f"{loader_type}_policy_loader"](agent, policy_resume_path)
-        agent = pretrained_loaders[f"{loader_type}_value_loader"](agent, critic_resume_path)
+        agent = pretrained_loaders[f"{loader_type}_policy_loader"](
+            agent, policy_resume_path
+        )
+        agent = pretrained_loaders[f"{loader_type}_value_loader"](
+            agent, critic_resume_path
+        )
 
     """
     eval function
@@ -369,7 +399,8 @@ def main(_):
                     "evaluation_visualization": wandb.Image(
                         mc_q_visualization(offline_trajs, agent)
                     )
-                }, step=step_number
+                },
+                step=step_number,
             )
 
     """

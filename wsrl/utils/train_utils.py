@@ -1,14 +1,11 @@
 from collections.abc import Mapping
+from typing import TypeVar
 
 import numpy as np
-from absl import flags
-
-
-from jax import tree_util
-from flax.training import checkpoints
-from typing import TypeVar
 import optax
-
+from absl import flags
+from flax.training import checkpoints
+from jax import tree_util
 
 FLAGS = flags.FLAGS
 # only one of the following should be set to true
@@ -20,6 +17,7 @@ flags.DEFINE_bool(
 flags.DEFINE_bool(
     "not_load_value_last_bias", False, "don't load the last bias of the value function"
 )
+
 
 def concatenate_batches(batches):
     concatenated = {}
@@ -54,13 +52,31 @@ def subsample_batch(batch, size):
     indices = np.random.randint(batch["rewards"].shape[0], size=size)
     return index_batch(batch, indices)
 
+
 TX = TypeVar("TX", bound=optax.OptState)
 
-def restore_optimizer_state(opt_state: TX, restored: Mapping) -> TX:
+
+def restore_optimizer_state(
+    opt_state: TX, restored: Mapping, del_alpha: bool = False
+) -> TX:
     """Restore optimizer state from loaded checkpoint (or .msgpack file)."""
+    if del_alpha:
+        del restored["actor"]["inner_state"]["0"]["0"]["nu"][
+            "modules_cql_alpha_lagrange"
+        ]
+        del restored["actor"]["inner_state"]["0"]["0"]["mu"][
+            "modules_cql_alpha_lagrange"
+        ]
+        del restored["temperature"]["inner_state"]["0"]["0"]["nu"][
+            "modules_cql_alpha_lagrange"
+        ]
+        del restored["temperature"]["inner_state"]["0"]["0"]["mu"][
+            "modules_cql_alpha_lagrange"
+        ]
     return tree_util.tree_unflatten(
         tree_util.tree_structure(opt_state), tree_util.tree_leaves(restored)
     )
+
 
 def sac_policy_loader(agent, checkpoint_path):
     # unfreeze the params from target agent
@@ -92,7 +108,14 @@ def sac_policy_loader(agent, checkpoint_path):
     opt_states["actor"] = restored_agent["state"]["opt_states"]["actor"]
     try:
         opt_states["temperature"] = restored_agent["state"]["opt_states"]["temperature"]
-        opt_states = restore_optimizer_state(agent.state.opt_states, opt_states)
+        del_alpha = False
+        if "antmaze" in checkpoint_path:
+            if "calql" in checkpoint_path or "cql" in checkpoint_path:
+                if FLAGS.agent not in ("calql", "cql"):
+                    del_alpha = True
+        opt_states = restore_optimizer_state(
+            agent.state.opt_states, opt_states, del_alpha
+        )
     except KeyError:
         # if temperature not in checkpoint, check we are loading the IQL checkpoint
         # and don't load the temperature
