@@ -7,7 +7,7 @@ import numpy as np
 import tqdm
 from absl import app, flags, logging
 from flax.training import checkpoints
-from ml_collections import config_flags
+from ml_collections import config_flags, ConfigDict
 
 from experiments.configs.ensemble_config import add_redq_config
 from wsrl.agents import agents
@@ -206,6 +206,11 @@ def main(_):
     rng = jax.random.PRNGKey(FLAGS.seed)
     rng, construct_rng = jax.random.split(rng)
     example_batch = subsample_batch(dataset, FLAGS.batch_size)
+    
+    # DGN needs the full demonstration dataset
+    if FLAGS.agent == "dgn":
+        FLAGS.config.agent_kwargs.update(ConfigDict({"demo_dataset": dataset}).copy_and_resolve_references())
+    
     agent = agents[FLAGS.agent].create(
         rng=construct_rng,
         observations=example_batch["observations"],
@@ -267,6 +272,9 @@ def main(_):
     is_online_stage = False
     observation, info = finetune_env.reset()
     done = False  # env done signal
+    
+    # Track total environment steps for DGN
+    total_env_steps = 0
 
     for _ in tqdm.tqdm(range(step, FLAGS.num_offline_steps + FLAGS.num_online_steps)):
         """
@@ -302,10 +310,19 @@ def main(_):
         with timer.context("env step"):
             if is_online_stage:
                 rng, action_rng = jax.random.split(rng)
-                action = agent.sample_actions(observation, seed=action_rng)
+                # Pass total_env_steps for DGN agent
+                if FLAGS.agent == "dgn":
+                    action = agent.sample_actions(
+                        observation, seed=action_rng, total_env_steps=total_env_steps
+                    )
+                else:
+                    action = agent.sample_actions(observation, seed=action_rng)
                 next_observation, reward, done, truncated, info = finetune_env.step(
                     action
                 )
+                
+                # Increment environment steps counter
+                total_env_steps += 1
 
                 transition = dict(
                     observations=observation,
@@ -321,6 +338,13 @@ def main(_):
                 if done or truncated:
                     observation, info = finetune_env.reset()
                     done = False
+                    
+                    # Track success for DGN shutoff mechanism
+                    if FLAGS.agent == "dgn":
+                        success = False
+                        if env_type == "adroit-binary":
+                            success = info.get("goal_achieved", False)
+                        agent = agent.update_success_history(success)
 
         """
         Updates
@@ -368,6 +392,12 @@ def main(_):
                         agent, update_info = agent.update(
                             batch,
                         )
+                        
+                    # Update DGN covariance network periodically
+                    if FLAGS.agent == "dgn" and step % agent.config["dgn_update_interval"] == 0:
+                        demo_batch = subsample_batch(dataset, FLAGS.batch_size)
+                        agent, cov_info = agent.update_covariance(demo_batch)
+                        update_info.update(cov_info)
 
         """
         Advance Step

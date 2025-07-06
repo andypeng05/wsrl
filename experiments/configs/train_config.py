@@ -1,6 +1,7 @@
 from ml_collections import ConfigDict
 
 from experiments.configs.cql_config import get_config as get_cql_config
+from experiments.configs.dgn_config import get_config as get_dgn_config
 from experiments.configs.iql_config import get_config as get_iql_config
 from experiments.configs.sac_config import get_config as get_sac_config
 from experiments.configs.wsrl_config import get_config as get_wsrl_config
@@ -269,6 +270,40 @@ def get_config(config_string):
                             "activations": "relu",
                             "kernel_scale_final": 1e-2,
                             "use_layer_norm": True,
+                        },
+                    )
+                ).to_dict(),
+            )
+        ),
+
+        "adroit_dgn": ConfigDict(
+            dict(
+                agent_kwargs=get_dgn_config(
+                    updates=dict(
+                        # Adroit-specific hyperparameters from paper's Table 1 & 2
+                        critic_ensemble_size=10,
+                        soft_target_update_rate=0.005,
+                        policy_network_kwargs={
+                            "hidden_dims": [256, 256],
+                            "activations": "relu",
+                        },
+                        critic_network_kwargs={
+                            "hidden_dims": [256, 256],
+                            "activations": "relu",
+                        },
+                        covariance_network_kwargs={
+                            "hidden_dims": [256, 256],  # MLP Hidden Size from Table 2
+                            "dropout_rate": 0.5,
+                        },
+                        # DGN hyperparameters for Adroit from Table 2
+                        dgn_update_interval=2000,
+                        dgn_annealing_timescale=30000,
+                        dgn_shutoff_success_threshold=None,  # Paper doesn't use shutoff for Adroit
+                        actor_optimizer_kwargs={
+                            "learning_rate": 1e-4,
+                        },
+                        critic_optimizer_kwargs={
+                            "learning_rate": 1e-4,
                         },
                     )
                 ).to_dict(),

@@ -1,6 +1,7 @@
 from .bc import BCAgent
 from .calql import CalQLAgent
 from .cql import CQLAgent
+from .dgn import DGNAgent
 from .iql import IQLAgent
 from .sac import SACAgent
 
@@ -10,4 +11,5 @@ agents = {
     "cql": CQLAgent,
     "calql": CalQLAgent,
     "sac": SACAgent,
+    "dgn": DGNAgent,
 }
