@@ -384,8 +384,10 @@ def main(_):
 
                     # update
                     if FLAGS.utd > 1:
-                        agent, update_info = agent.update_high_utd(
+                        # assume dgn
+                        agent, update_info = agent.update_high_utd_with_step(
                             batch,
+                            step,
                             utd_ratio=FLAGS.utd,
                         )
                     else:
@@ -393,11 +395,6 @@ def main(_):
                             batch,
                         )
                         
-                    # Update DGN covariance network periodically
-                    if FLAGS.agent == "dgn" and step % agent.config["dgn_update_interval"] == 0:
-                        demo_batch = subsample_batch(dataset, FLAGS.batch_size)
-                        agent, cov_info = agent.update_covariance(demo_batch)
-                        update_info.update(cov_info)
 
         """
         Advance Step

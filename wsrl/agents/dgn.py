@@ -37,34 +37,26 @@ class CovarianceNetwork(nn.Module):
     def __call__(self, observations: jnp.ndarray, train: bool = True) -> jnp.ndarray:
         x = observations
         
-        # MLP layers with dropout
+        # MLP layers with optional dropout
         for hidden_dim in self.hidden_dims:
             x = nn.Dense(hidden_dim)(x)
             x = nn.relu(x)
-            if train:
-                x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=not train)
+            
+            # Only apply dropout during training
+            if train and self.dropout_rate > 0:
+                x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=False)
+
         
-        # Output layer - outputs lower triangular matrix elements
+        # Output layer - outputs flat vector of params
         # For d-dimensional action space, we need d*(d+1)/2 elements
-        num_elements = self.output_dim * (self.output_dim + 1) // 2
-        cholesky_elements = nn.Dense(num_elements)(x)
+        num_params = self.output_dim * (self.output_dim + 1) // 2
+        cholesky_elements = nn.Dense(num_params)(x)
         
-        # Construct lower triangular matrix
-        batch_size = observations.shape[0]
-        L = jnp.zeros((batch_size, self.output_dim, self.output_dim))
-        
-        # Fill lower triangular matrix
-        idx = 0
-        for i in range(self.output_dim):
-            for j in range(i + 1):
-                if i == j:
-                    # Diagonal elements must be positive - use softplus
-                    L = L.at[:, i, j].set(nn.softplus(cholesky_elements[:, idx]) + 1e-6)
-                else:
-                    L = L.at[:, i, j].set(cholesky_elements[:, idx])
-                idx += 1
-        
-        return L
+        return cholesky_elements
+
+
+def _make_sampling_dist(policy_mean, L):
+    return distrax.MultivariateNormalTri(loc=policy_mean, scale_tri=L)
 
 
 class DGNAgent(SACAgent):
@@ -131,25 +123,51 @@ class DGNAgent(SACAgent):
     def forward_covariance(
         self,
         observations: Data,
+        rng: Optional[PRNGKey] = None,
         *,
         grad_params: Optional[Params] = None,
         train: bool = True,
     ) -> jnp.ndarray:
-        """
-        Forward pass for covariance network that outputs Cholesky decomposition.
-        """
-        L = self.state.apply_fn(
+        """Convert raw network output to lower triangular Cholesky matrix."""
+        cholesky_elements = self.state.apply_fn(
             {"params": grad_params or self.state.params},
             observations,
             train=train,
             name="covariance",
+            rngs={"dropout": rng} if train else {},
         )
+        
+        action_dim = self.config["action_dim"]
+        
+        def params_to_tril(flat_params):
+            if flat_params.ndim == 2:
+                # Batch of parameters: (batch_size, num_params)
+                def single_params_to_tril(single_flat_params):
+                    L = jnp.zeros((action_dim, action_dim))
+                    tril_indices = jnp.tril_indices(action_dim)
+                    L = L.at[tril_indices].set(single_flat_params)
+                    diag_mask = jnp.eye(action_dim, dtype=bool)
+                    L = jnp.where(diag_mask, nn.softplus(L) + 1e-6, L * 0.1)
+                    return L
+                return jax.vmap(single_params_to_tril)(flat_params)
+            else:
+                # Single set of parameters: (num_params,)
+                L = jnp.zeros((action_dim, action_dim))
+                tril_indices = jnp.tril_indices(action_dim)
+                L = L.at[tril_indices].set(flat_params)
+                diag_mask = jnp.eye(action_dim, dtype=bool)
+                L = jnp.where(diag_mask, nn.softplus(L) + 1e-6, L * 0.1)
+                return L
+            
+        L = params_to_tril(cholesky_elements)
         return L
-    
+
     def covariance_loss_fn(self, batch, params: Params, rng: PRNGKey):
         """
         Train covariance network to minimize negative log-likelihood on demonstration data.
+        Returns zero loss when not training covariance (e.g., during standard SAC updates).
         """
+        
         # Get demonstration data
         demo_states = batch["observations"]
         demo_actions = batch["actions"]
@@ -176,62 +194,33 @@ class DGNAgent(SACAgent):
         info = {
             "covariance_loss": loss,
             "mean_covariance": mean_covariance,
-            "covariance_log_det": jnp.mean(sampling_dist.log_det_covariance()),
+            "covariance_log_det": jnp.mean(jnp.log(jnp.linalg.det(covariance))),
         }
         
         return loss, info
     
     @overrides
     def loss_fns(self, batch):
-        """Add covariance loss to the standard SAC losses."""
+        """Include all losses including covariance (will be filtered by networks_to_update)."""
         losses = super().loss_fns(batch)
-        # Note: covariance loss is computed separately on demo data
+        losses["covariance"] = partial(self.covariance_loss_fn, batch)
         return losses
-    
-    def update_covariance(self, demo_batch: Optional[Batch] = None, pmap_axis: Optional[str] = None):
-        """Update covariance network on demonstration data."""
-        if demo_batch is None:
-            if self.demo_dataset is None:
-                raise ValueError("No demonstration data provided. Either pass demo_batch or initialize agent with demo_dataset.")
-            # TODO: Sample from self.demo_dataset
-            raise NotImplementedError("Automatic sampling from demo_dataset not yet implemented. Please provide demo_batch.")
-        
-        rng, key = jax.random.split(self.state.rng)
-        
-        # Create loss function
-        loss_fn = partial(self.covariance_loss_fn, demo_batch)
-        
-        # Update only covariance network
-        loss_fns = {
-            "covariance": loss_fn,
-            # Dummy losses for other networks
-            "actor": lambda params, rng: (0.0, {}),
-            "critic": lambda params, rng: (0.0, {}),
-            "temperature": lambda params, rng: (0.0, {}),
-        }
-        
-        new_state, info = self.state.apply_loss_fns(
-            loss_fns, pmap_axis=pmap_axis, has_aux=True
+
+
+    def update_covariance(self, demo_batch, pmap_axis=None):
+        """Update only the covariance network on demonstration data."""
+        # Use the standard update mechanism, but only update covariance network
+        return self.update(
+            demo_batch, 
+            pmap_axis=pmap_axis, 
+            networks_to_update=frozenset({"covariance"}),
+            update_covariance_flag=True,
         )
-        
-        # Update RNG
-        new_state = new_state.replace(rng=rng)
-        
-        return self.replace(state=new_state), info["covariance"]
     
     def get_noise_scale(self, total_env_steps: int) -> float:
         """
         Compute noise scale based on annealing or success-based shutoff.
         """
-        if self.config.get("dgn_shutoff_success_threshold") is not None:
-            # Check if we should shut off based on success rate
-            if len(self.success_history) >= self.config["dgn_shutoff_epochs"]:
-                recent_success_rate = np.mean(
-                    self.success_history[-self.config["dgn_shutoff_epochs"]:]
-                )
-                if recent_success_rate >= self.config["dgn_shutoff_success_threshold"]:
-                    return 0.0
-        
         if self.config.get("dgn_annealing_timescale") is not None:
             # Apply exponential annealing
             scale = jnp.exp(-total_env_steps / self.config["dgn_annealing_timescale"])
@@ -239,8 +228,21 @@ class DGNAgent(SACAgent):
         
         return 1.0
     
+    def should_shutoff_noise(self) -> bool:
+        """
+        Check if noise should be shut off based on success rate.
+        This is called outside of JIT-compiled functions.
+        """
+        if self.config.get("dgn_shutoff_success_threshold") is not None:
+            if len(self.success_history) >= self.config["dgn_shutoff_epochs"]:
+                recent_success_rate = np.mean(
+                    self.success_history[-self.config["dgn_shutoff_epochs"]:]
+                )
+                if recent_success_rate >= self.config["dgn_shutoff_success_threshold"]:
+                    return True
+        return False
+    
     @overrides
-    @partial(jax.jit, static_argnames=("argmax",))
     def sample_actions(
         self,
         observations: Data,
@@ -261,7 +263,18 @@ class DGNAgent(SACAgent):
         """
         if argmax:
             # For evaluation, use deterministic policy
-            return super().sample_actions(observations, seed=seed, argmax=True)
+            actions = super().sample_actions(observations, seed=seed, argmax=True)
+            # Convert JAX array to NumPy array for environment compatibility
+            actions = np.asarray(actions)
+            return actions
+        
+        # Check if noise should be shut off (outside JIT)
+        if self.should_shutoff_noise():
+            # Use deterministic policy when shutoff is active
+            actions = super().sample_actions(observations, seed=seed, argmax=True)
+            # Convert JAX array to NumPy array for environment compatibility
+            actions = np.asarray(actions)
+            return actions
         
         # Get the DGN sampling distribution
         sampling_dist = self.forward_sampling_policy(
@@ -283,6 +296,13 @@ class DGNAgent(SACAgent):
         # Clip actions to valid range
         actions = jnp.clip(actions, -1.0, 1.0)
         
+        # Convert JAX array to NumPy array for environment compatibility
+        actions = np.asarray(actions)
+        
+        # Ensure actions is a flat array (not nested) TODO: check if this is needed
+        if actions.ndim > 1:
+            actions = actions.squeeze()
+        
         return actions
     
     def update_success_history(self, episode_success: bool) -> "DGNAgent":
@@ -294,7 +314,6 @@ class DGNAgent(SACAgent):
             new_history = new_history[-max_history:]
         return self.replace(success_history=new_history)
     
-    @partial(jax.jit, static_argnames=("apply_noise_scaling", "train", "covariance_train"))
     def forward_sampling_policy(
         self,
         observations: Data,
@@ -304,48 +323,39 @@ class DGNAgent(SACAgent):
         apply_noise_scaling: bool = True,
         total_env_steps: Optional[int] = None,
         train: bool = False,
-        covariance_train: Optional[bool] = None,
+        covariance_train: Optional[bool] = False,
     ) -> distrax.Distribution:
         """
         Forward pass for the DGN sampling policy π_sampling(a|s) = N(μ_θ(s), Σ_φ(s)).
-        
         This combines the SAC policy mean with the learned DGN covariance.
-        
-        Args:
-            observations: Input observations
-            rng: Random key for policy forward pass
-            grad_params: Optional parameters for gradient computation
-            apply_noise_scaling: Whether to apply annealing/shutoff scaling
-            total_env_steps: Total environment steps for annealing (required if apply_noise_scaling=True)
-            train: Whether in training mode for policy network
-            covariance_train: Whether in training mode for covariance network (defaults to train)
-            
-        Returns:
-            MultivariateNormalTri distribution for sampling
         """
-        if covariance_train is None:
+        covariance_rng = None
+        if train or covariance_train:
+            assert rng is not None, "Must specify rng when training"
+            rng, covariance_rng = jax.random.split(rng)
             covariance_train = train
-            
         # Get policy mean from SAC
-        policy_dist = self.forward_policy(observations, rng=rng, grad_params=grad_params, train=train)
-        policy_mean = policy_dist.mode()
-        
+        policy_mean = self.forward_policy(
+            observations, 
+            rng=rng, 
+            grad_params=grad_params, 
+            train=train
+        ).mode()
         # Get covariance from DGN network
-        L = self.forward_covariance(observations, grad_params=grad_params, train=covariance_train)
-        
+        L = self.forward_covariance(
+            observations, 
+            rng=covariance_rng, 
+            grad_params=grad_params, 
+            train=covariance_train
+        )
         # Apply noise scaling if requested
         if apply_noise_scaling:
             if total_env_steps is None:
                 raise ValueError("total_env_steps required when apply_noise_scaling=True")
             noise_scale = self.get_noise_scale(total_env_steps)
             L = L * noise_scale
-        
-        # Create multivariate normal sampling distribution
-        sampling_dist = distrax.MultivariateNormalTri(
-            loc=policy_mean,
-            scale_tri=L
-        )
-        
+        # Create multivariate normal sampling distribution using pure function
+        sampling_dist = _make_sampling_dist(policy_mean, L)
         return sampling_dist
     
     @classmethod
@@ -380,6 +390,8 @@ class DGNAgent(SACAgent):
         """
         # Create config from all arguments
         config = ConfigDict(kwargs)
+        config.action_dim = actions.shape[-1]
+
         
         # Set up encoders
         if shared_encoder:
@@ -420,7 +432,7 @@ class DGNAgent(SACAgent):
         
         # DGN covariance network
         covariance_def = CovarianceNetwork(
-            output_dim=actions.shape[-1],
+            output_dim=config.action_dim,
             **covariance_network_kwargs,
             name="covariance",
         )
@@ -444,8 +456,16 @@ class DGNAgent(SACAgent):
         
         # Initialize params
         rng, init_rng = jax.random.split(rng)
+        
+        # Create a separate RNG key for dropout
+        rng, dropout_rng = jax.random.split(rng)
+        init_rng_dict = {
+            "params": init_rng,
+            "dropout": dropout_rng
+        }
+        
         params = model_def.init(
-            init_rng,
+            init_rng_dict,
             actor=[observations],
             critic=[observations, actions],
             temperature=[],
@@ -464,6 +484,13 @@ class DGNAgent(SACAgent):
         
         if config.get("target_entropy", 0.0) >= 0.0:
             config.target_entropy = -actions.shape[-1]
+        
+        # Add missing SAC parameters if not provided
+        if "max_target_backup" not in config:
+            config.max_target_backup = False
+        if "n_actions" not in config:
+            config.n_actions = 10
+        
         config = flax.core.FrozenDict(config)
         
         return cls(
@@ -471,4 +498,157 @@ class DGNAgent(SACAgent):
             config=config,
             demo_dataset=demo_dataset,
             success_history=[],
+        ) 
+
+
+
+
+    @partial(jax.jit, static_argnames=("pmap_axis", "networks_to_update", "update_covariance_flag"))
+    def update(
+        self,
+        batch: Batch,
+        *,
+        pmap_axis: str = None,
+        networks_to_update: frozenset[str] = frozenset(
+            {"actor", "critic", "temperature"}
+        ),
+        update_covariance_flag: bool = False,
+    ) -> Tuple["DGNAgent", dict]:
+        """
+        Take one gradient step on all (or a subset) of the networks in the agent.
+        
+        Args:
+            batch: Training batch
+            pmap_axis: Axis for pmap
+            networks_to_update: Networks to update for this call
+            update_covariance_flag: If True, also update covariance network
+        """
+        batch_size = batch["rewards"].shape[0]
+        chex.assert_tree_shape_prefix(batch, (batch_size,))
+
+        rng, key = jax.random.split(self.state.rng)
+
+        # Determine which networks to actually update
+        final_networks_to_update = networks_to_update
+        if update_covariance_flag:
+            final_networks_to_update = networks_to_update | {"covariance"}
+
+        # Compute gradients and update params
+        loss_fns = self.loss_fns(batch)
+
+        # Only compute gradients for specified networks
+        assert final_networks_to_update.issubset(
+            loss_fns.keys()
+        ), f"Invalid gradient steps: {final_networks_to_update}"
+        for key in loss_fns.keys() - final_networks_to_update:
+            loss_fns[key] = lambda params, rng: (0.0, {})
+
+        new_state, info = self.state.apply_loss_fns(
+            loss_fns, pmap_axis=pmap_axis, has_aux=True
+        )
+
+        # Update target network (if requested)
+        if "critic" in final_networks_to_update:
+            new_state = new_state.target_update(self.config["soft_target_update_rate"])
+
+        # Update RNG
+        new_state = new_state.replace(rng=rng)
+
+        # Log learning rates
+        for name, opt_state in new_state.opt_states.items():
+            if (
+                hasattr(opt_state, "hyperparams")
+                and "learning_rate" in opt_state.hyperparams.keys()
+            ):
+                info[f"{name}_lr"] = opt_state.hyperparams["learning_rate"]
+
+        return self.replace(state=new_state), info
+
+        
+    @partial(jax.jit, static_argnames=("utd_ratio", "pmap_axis", "update_covariance_flag"))
+    def update_high_utd(
+        self,
+        batch: Batch,
+        *,
+        utd_ratio: int,
+        pmap_axis: Optional[str] = None,
+        update_covariance_flag: bool = False,
+    ) -> Tuple["DGNAgent", dict]:
+        """
+        Fast JITted high-UTD version of `.update` with DGN covariance support.
+
+        Splits the batch into minibatches, performs `utd_ratio` critic
+        (and target) updates, and then one actor/temperature update.
+
+        Batch dimension must be divisible by `utd_ratio`.
+        """
+        batch_size = batch["rewards"].shape[0]
+        assert (
+            batch_size % utd_ratio == 0
+        ), f"Batch size {batch_size} must be divisible by UTD ratio {utd_ratio}"
+        minibatch_size = batch_size // utd_ratio
+        chex.assert_tree_shape_prefix(batch, (batch_size,))
+
+        def scan_body(carry: Tuple["DGNAgent"], data: Tuple[Batch]):
+            (agent,) = carry
+            (minibatch,) = data
+            agent, info = agent.update(
+                minibatch,
+                pmap_axis=pmap_axis,
+                networks_to_update=frozenset({"critic"}),
+                update_covariance_flag=False,  # Never update covariance during critic updates
+            )
+            return (agent,), info
+
+        def make_minibatch(data: jnp.ndarray):
+            return jnp.reshape(data, (utd_ratio, minibatch_size) + data.shape[1:])
+
+        minibatches = jax.tree_map(make_minibatch, batch)
+
+        (agent,), critic_infos = jax.lax.scan(scan_body, (self,), (minibatches,))
+
+        critic_infos = jax.tree_map(lambda x: jnp.mean(x, axis=0), critic_infos)
+        del critic_infos["actor"]
+        del critic_infos["temperature"]
+
+        # Take one gradient descent step on the actor and temperature
+        # Also handle covariance updates here
+        networks_to_update = frozenset({"actor", "temperature"})
+
+        agent, actor_temp_infos = agent.update(
+            batch,
+            pmap_axis=pmap_axis,
+            networks_to_update=networks_to_update,
+            update_covariance_flag=update_covariance_flag,
+        )
+        del actor_temp_infos["critic"]
+
+        infos = {**critic_infos, **actor_temp_infos}
+
+        return agent, infos 
+
+    def update_high_utd_with_step(
+        self,
+        batch: Batch,
+        step: int,
+        *,
+        utd_ratio: int,
+        pmap_axis: Optional[str] = None,
+    ) -> Tuple["DGNAgent", dict]:
+        """
+        Optimized high-UTD update with automatic covariance scheduling.
+        For UTD > 1 training only.
+        """
+        # Determine if we should update covariance based on step
+        dgn_update_interval = self.config.get("dgn_update_interval")
+        update_covariance_flag = (
+            dgn_update_interval is not None and 
+            step % dgn_update_interval == 0
+        )
+        
+        return self.update_high_utd(
+            batch,
+            utd_ratio=utd_ratio,
+            pmap_axis=pmap_axis,
+            update_covariance_flag=update_covariance_flag,
         ) 

@@ -305,6 +305,10 @@ def get_config(config_string):
                         critic_optimizer_kwargs={
                             "learning_rate": 1e-4,
                         },
+                        dgn_covariance_optimizer_kwargs={
+                            "learning_rate": 1e-4,
+                            "weight_decay": 3e-2,
+                        },
                     )
                 ).to_dict(),
             )

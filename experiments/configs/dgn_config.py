@@ -28,7 +28,6 @@ def get_config(updates=None):
         {
             "learning_rate": 1e-4,  # Same as other networks
             "weight_decay": 3e-2,  # Weight Decay from Table 2
-            "optimizer": "adamw",  # AdamW from Table 2
         }
     )
     
