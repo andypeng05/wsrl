@@ -10,6 +10,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 from ml_collections import ConfigDict
 from functools import partial
 
@@ -20,13 +21,21 @@ from wsrl.networks.mlp import MLP
 
 
 class CovarianceNetwork(nn.Module):
-    """Network that outputs Cholesky decomposition of covariance matrix."""
+    """Network that outputs multivariate normal distribution with learned covariance."""
     hidden_dims: Tuple[int, ...] = (256, 256)
     output_dim: int = None  # action_dim
     dropout_rate: float = 0.5
+    cov_diagonal_eps: float = 1e-5
     
     @nn.compact
-    def __call__(self, observations: jnp.ndarray, train: bool = True) -> jnp.ndarray:
+    def __call__(self, observations: jnp.ndarray, train: bool = True) -> distrax.Distribution:
+        # Ensure observations has batch dimension
+        if observations.ndim == 1:
+            observations = observations[None, :]
+            
+        batch_size = observations.shape[0]
+        action_dim = self.output_dim
+        
         # Use MLP for hidden layers
         x = MLP(
             hidden_dims=self.hidden_dims,
@@ -34,12 +43,32 @@ class CovarianceNetwork(nn.Module):
             dropout_rate=self.dropout_rate if train else 0.0,
         )(observations, train=train)
         
-        # Output layer - outputs flat vector of params
-        # For d-dimensional action space, we need d*(d+1)/2 elements
-        num_params = self.output_dim * (self.output_dim + 1) // 2
+        # Output layer - outputs flat vector of lower triangular matrix elements
+        num_params = action_dim * (action_dim + 1) // 2
         cholesky_elements = nn.Dense(num_params)(x)
         
-        return cholesky_elements
+        # Handle potential numerical issues
+        cholesky_elements = jnp.nan_to_num(cholesky_elements, nan=0.0, posinf=10.0, neginf=-10.0)
+        
+        # Construct lower triangular matrix for each batch element
+        tril_indices = jnp.tril_indices(action_dim)
+        L = jnp.zeros((batch_size, action_dim, action_dim))
+        L = L.at[:, tril_indices[0], tril_indices[1]].set(cholesky_elements)
+        
+        # Apply softplus to diagonal to ensure positive definiteness
+        diag_indices = jnp.arange(action_dim)
+        L = L.at[:, diag_indices, diag_indices].set(
+            nn.softplus(L[:, diag_indices, diag_indices]) + self.cov_diagonal_eps
+        )
+        
+        # Create zero-mean multivariate normal distribution
+        zero_mean = jnp.zeros((batch_size, action_dim))
+        dist = distrax.MultivariateNormalTri(
+            loc=zero_mean,
+            scale_tri=L
+        )
+        
+        return dist
 
 
 class DGNModule:
@@ -68,49 +97,13 @@ class DGNModule:
         grad_params: Optional[Params] = None,
         train: bool = True,
     ) -> distrax.Distribution:
-        """Convert raw network output to multivariate normal distribution with learned covariance."""
-        # Ensure observations has batch dimension
-        if observations.ndim == 1:
-            observations = observations[None, :]
-            
-        cholesky_elements = self.state.apply_fn(
-            {"params": grad_params or self.state.params},
+        """Forward pass through covariance network."""
+        return self.state.apply_fn(
+            grad_params or self.state.params,
             observations,
             train=train,
-            name="covariance",
             rngs={"dropout": rng} if train and rng is not None else {},
         )
-        
-        action_dim = self.config.action_dim
-        batch_size = observations.shape[0]
-        
-        def params_to_tril(flat_params):
-            # Handle potential numerical issues
-            flat_params = jnp.nan_to_num(flat_params, nan=0.0, posinf=10.0, neginf=-10.0)
-            
-            L = jnp.zeros((action_dim, action_dim))
-            tril_indices = jnp.tril_indices(action_dim)
-            L = L.at[tril_indices].set(flat_params)
-            
-            # Apply softplus to diagonal to ensure positive and clip for stability
-            diag_indices = jnp.arange(action_dim)
-            diagonal_values = nn.softplus(L[diag_indices, diag_indices]) + self.config.cov_diagonal_eps
-            diagonal_values = jnp.clip(diagonal_values, 0.0, self.config.cov_max_diagonal)
-            L = L.at[diag_indices, diag_indices].set(diagonal_values)
-            
-            return L
-        
-        # Apply to batch using vmap
-        L = jax.vmap(params_to_tril)(cholesky_elements)
-        
-        # Zero-mean distribution
-        zero_mean = jnp.zeros((batch_size, action_dim))
-        dist = distrax.MultivariateNormalTri(
-            loc=zero_mean,
-            scale_tri=L
-        )
-        
-        return dist
     
     def sample_noise(self, observations: Data, rng: PRNGKey, total_env_steps: Optional[int] = None) -> jnp.ndarray:
         """Sample exploration noise from learned covariance with optional annealing."""
@@ -122,8 +115,9 @@ class DGNModule:
         noise = dist.sample(seed=sample_rng)
         
         # Apply noise scaling if configured
-        if total_env_steps is not None and self.config.dgn_annealing_timescale is not None:
-            scale = jnp.exp(-max(1, total_env_steps) / self.config.dgn_annealing_timescale)
+        dgn_annealing_timescale = self.config.get("dgn_annealing_timescale", None)
+        if total_env_steps is not None and dgn_annealing_timescale is not None:
+            scale = jnp.exp(-max(1, total_env_steps) / dgn_annealing_timescale)
             noise = noise * scale
         
         # Remove batch dimension if single observation
@@ -131,10 +125,10 @@ class DGNModule:
             noise = noise.squeeze(0)
         
         return noise
-    
+
+    @staticmethod
     @partial(jax.jit, static_argnames=("entropy_coef",))
     def _train_step(
-        self, 
         state: JaxRLTrainState, 
         batch: Batch, 
         rng: PRNGKey,
@@ -144,12 +138,12 @@ class DGNModule:
         rng, dropout_rng = jax.random.split(rng)
         
         def loss_fn(params):
-            # Note: batch["actions"] contains action deltas (expert - policy), not raw actions
-            dist = self.forward_covariance(
-                batch["observations"], 
-                rng=dropout_rng, 
-                grad_params=params, 
-                train=True
+            # Forward pass through covariance network
+            dist = state.apply_fn(
+                params,
+                batch["observations"],
+                train=True,
+                rngs={"dropout": dropout_rng},
             )
             
             # Negative log-likelihood of action deltas under learned distribution
@@ -179,9 +173,15 @@ class DGNModule:
         
         grads, info = jax.grad(loss_fn, has_aux=True)(state.params)
         
-        # Update state
-        new_state = state.apply_gradients(grads=grads)
-        new_state = new_state.replace(rng=rng)
+        # Update state manually since we're using direct network
+        updates, new_opt_state = state.txs.update(grads, state.opt_states, state.params)
+        new_params = optax.apply_updates(state.params, updates)
+        new_state = state.replace(
+            step=state.step + 1,
+            params=new_params,
+            opt_states=new_opt_state,
+            rng=rng
+        )
         
         return new_state, info
     
@@ -217,7 +217,9 @@ class DGNModule:
         state = self.state
         all_infos = {}
         
-        for epoch in range(self.config.dgn_cov_train_epochs):
+        dgn_entropy_coef = self.config["dgn_entropy_coef"]
+        
+        for epoch in range(self.config["dgn_cov_train_epochs"]):
             epoch_infos = []
             
             # Shuffle indices
@@ -225,8 +227,8 @@ class DGNModule:
             shuffled_indices = jax.random.permutation(shuffle_rng, n_samples)
             
             # Train on batches
-            for batch_idx in range(0, n_samples, self.config.dgn_batch_size):
-                end_idx = min(batch_idx + self.config.dgn_batch_size, n_samples)
+            for batch_idx in range(0, n_samples, self.config["dgn_batch_size"]):
+                end_idx = min(batch_idx + self.config["dgn_batch_size"], n_samples)
                 batch_indices = shuffled_indices[batch_idx:end_idx]
                 
                 batch = {
@@ -240,23 +242,29 @@ class DGNModule:
                     state, 
                     batch, 
                     step_rng,
-                    entropy_coef=self.config.dgn_entropy_coef
+                    entropy_coef=dgn_entropy_coef
                 )
                 epoch_infos.append(info)
             
             # Average info across batches in last epoch
-            if epoch == self.config.dgn_cov_train_epochs - 1:
+            if epoch == self.config["dgn_cov_train_epochs"] - 1:
                 all_infos = jax.tree_map(lambda *xs: jnp.mean(jnp.stack(xs)), *epoch_infos)
         
         # Add step to logged info
         all_infos["dgn_update_step"] = step
+        
+        # Add noise scale if annealing is configured
+        dgn_annealing_timescale = self.config.get("dgn_annealing_timescale", None)
+        if dgn_annealing_timescale is not None:
+            noise_scale = float(jnp.exp(-max(1, step) / dgn_annealing_timescale))
+            all_infos["noise_scale"] = noise_scale
         
         # Return updated module
         return self.replace(state=state, step=self.step + 1), all_infos
     
     def dgn_update(self, agent, env_step: int) -> Tuple["DGNModule", dict]:
         """Update DGN if it's time based on update interval."""
-        if env_step % self.config.dgn_update_interval == 0:
+        if env_step % self.config["dgn_update_interval"] == 0:
             return self.update(agent, env_step)
         return self, {}
     
@@ -276,7 +284,6 @@ class DGNModule:
         dgn_covariance_optimizer_kwargs: dict = {
             "learning_rate": 1e-4,
             "weight_decay": 3e-2,
-            "optimizer": "adamw",
         },
         **kwargs,
     ):
@@ -295,22 +302,18 @@ class DGNModule:
         config.hidden_dims = covariance_network_kwargs.get("hidden_dims", [256, 256])
         config.dropout_rate = covariance_network_kwargs.get("dropout_rate", 0.5)
         
-        # Define network
+        # Define network  
         covariance_def = CovarianceNetwork(
             hidden_dims=tuple(covariance_network_kwargs["hidden_dims"]),
             output_dim=config.action_dim,
             dropout_rate=covariance_network_kwargs["dropout_rate"],
+            cov_diagonal_eps=config["cov_diagonal_eps"],
         )
         
-        model_def = ModuleDict({"covariance": covariance_def})
-        
-        # Initialize params
+        # Initialize params directly with the network (no ModuleDict)
         rng, init_rng, dropout_rng = jax.random.split(rng, 3)
         init_rng_dict = {"params": init_rng, "dropout": dropout_rng}
-        params = model_def.init(
-            init_rng_dict,
-            covariance=[observations],
-        )["params"]
+        params = covariance_def.init(init_rng_dict, observations)
         
         # Create optimizer
         tx = make_optimizer(**dgn_covariance_optimizer_kwargs)
@@ -318,9 +321,9 @@ class DGNModule:
         # Create state
         rng, create_rng = jax.random.split(rng)
         state = JaxRLTrainState.create(
-            apply_fn=model_def.apply,
+            apply_fn=covariance_def.apply,
             params=params,
-            txs={"covariance": tx},
+            txs=tx,
             target_params=params,
             rng=create_rng,
         )

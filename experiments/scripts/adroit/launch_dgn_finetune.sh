@@ -4,7 +4,7 @@ export MUJOCO_GL=egl
 
 
 python3 finetune_dgn.py \
---agent dgn \
+--agent sac \
 --config experiments/configs/train_config.py:adroit_rlpd \
 --dgn_config experiments/configs/train_config.py:adroit_dgn \
 --project dgn-adroit-finetune \
@@ -14,6 +14,6 @@ python3 finetune_dgn.py \
 --offline_data_ratio 0.5 \
 --env pen-binary-v0 \
 --utd 20 \
---batch_size (20 * 128) \
+--batch_size $((20 * 128)) \
 --warmup_steps 0 \
 $@ 

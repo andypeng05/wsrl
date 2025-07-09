@@ -395,11 +395,14 @@ def main(_):
                         agent, update_info = agent.update(
                             batch,
                         )
-                    
-                    # Update DGN module if enabled
-                    dgn_module, dgn_info = dgn_module.dgn_update(agent, step)
-                    if dgn_info:  # Only log if DGN was updated
-                        update_info.update({f"dgn/{k}": v for k, v in dgn_info.items()})
+        
+        # Update DGN module during online training (independent of warmup)
+        dgn_module, dgn_info = dgn_module.dgn_update(agent, step)
+        if dgn_info:  # Only log if DGN was updated
+            if "update_info" in locals():
+                update_info.update({f"dgn/{k}": v for k, v in dgn_info.items()})
+            else:
+                update_info = {f"dgn/{k}": v for k, v in dgn_info.items()}
 
         """
         Advance Step
@@ -452,11 +455,6 @@ def main(_):
             if "update_info" in locals():
                 update_info = jax.device_get(update_info)
                 wandb_logger.log({"training": update_info}, step=step)
-            
-            # Log DGN annealing scale if DGN is enabled and we're in online stage
-            if FLAGS.use_dgn_exploration and is_online_stage:
-                dgn_scale = float(jnp.exp(-max(1, step) / dgn_module.config.dgn_annealing_timescale))
-                wandb_logger.log({"dgn/noise_scale": dgn_scale}, step=step)
 
             wandb_logger.log({"timer": timer.get_average_times()}, step=step)
 
