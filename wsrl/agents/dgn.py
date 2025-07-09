@@ -35,17 +35,12 @@ class CovarianceNetwork(nn.Module):
     
     @nn.compact
     def __call__(self, observations: jnp.ndarray, train: bool = True) -> jnp.ndarray:
-        x = observations
-        
-        # MLP layers with optional dropout
-        for hidden_dim in self.hidden_dims:
-            x = nn.Dense(hidden_dim)(x)
-            x = nn.relu(x)
-            
-            # Only apply dropout during training
-            if train and self.dropout_rate > 0:
-                x = nn.Dropout(rate=self.dropout_rate)(x, deterministic=False)
-
+        # Use MLP for hidden layers
+        x = MLP(
+            hidden_dims=self.hidden_dims,
+            activate_final=True,
+            dropout_rate=self.dropout_rate if train else 0.0,
+        )(observations, train=train)
         
         # Output layer - outputs flat vector of params
         # For d-dimensional action space, we need d*(d+1)/2 elements
@@ -53,10 +48,6 @@ class CovarianceNetwork(nn.Module):
         cholesky_elements = nn.Dense(num_params)(x)
         
         return cholesky_elements
-
-
-def _make_sampling_dist(policy_mean, L):
-    return distrax.MultivariateNormalTri(loc=policy_mean, scale_tri=L)
 
 
 class DGNAgent(SACAgent):
@@ -140,61 +131,81 @@ class DGNAgent(SACAgent):
         action_dim = self.config["action_dim"]
         
         def params_to_tril(flat_params):
-            if flat_params.ndim == 2:
-                # Batch of parameters: (batch_size, num_params)
-                def single_params_to_tril(single_flat_params):
-                    L = jnp.zeros((action_dim, action_dim))
-                    tril_indices = jnp.tril_indices(action_dim)
-                    L = L.at[tril_indices].set(single_flat_params)
-                    diag_mask = jnp.eye(action_dim, dtype=bool)
-                    L = jnp.where(diag_mask, nn.softplus(L) + 1e-6, L * 0.1)
-                    return L
-                return jax.vmap(single_params_to_tril)(flat_params)
-            else:
-                # Single set of parameters: (num_params,)
-                L = jnp.zeros((action_dim, action_dim))
-                tril_indices = jnp.tril_indices(action_dim)
-                L = L.at[tril_indices].set(flat_params)
-                diag_mask = jnp.eye(action_dim, dtype=bool)
-                L = jnp.where(diag_mask, nn.softplus(L) + 1e-6, L * 0.1)
-                return L
+            # Handle potential numerical issues
+            flat_params = jnp.nan_to_num(flat_params, nan=0.0, posinf=10.0, neginf=-10.0)
             
-        L = params_to_tril(cholesky_elements)
+            L = jnp.zeros((action_dim, action_dim))
+            tril_indices = jnp.tril_indices(action_dim)
+            L = L.at[tril_indices].set(flat_params)
+            
+            # Apply softplus to diagonal to ensure positive
+            diag_indices = jnp.arange(action_dim)
+            L = L.at[diag_indices, diag_indices].set(
+                nn.softplus(L[diag_indices, diag_indices]) + self.config.get("cov_diagonal_eps", 1e-5)
+            )
+            
+            return L
+        
+        # Apply to batch using vmap
+        L = jax.vmap(params_to_tril)(cholesky_elements)
         return L
 
     def covariance_loss_fn(self, batch, params: Params, rng: PRNGKey):
         """
         Train covariance network to minimize negative log-likelihood on demonstration data.
-        Returns zero loss when not training covariance (e.g., during standard SAC updates).
+        Following the official implementation, we fit N(0, Σ) to the deltas between
+        expert actions and current policy actions.
         """
-        
-        # Get demonstration data
         demo_states = batch["observations"]
         demo_actions = batch["actions"]
         
-        # Get the sampling policy distribution
         rng, policy_rng = jax.random.split(rng)
-        sampling_dist = self.forward_sampling_policy(
-            demo_states,
-            rng=policy_rng,
-            grad_params=params,  # Pass grad_params for covariance network gradients
-            apply_noise_scaling=False,  # No scaling during training
-            train=False,  # Policy in eval mode (no gradients)
-            covariance_train=True  # Covariance in train mode (with gradients)
+        policy_dist = self.forward_policy(demo_states, rng=policy_rng, train=False)
+        predicted_actions = policy_dist.mode()
+        
+        action_deltas = demo_actions - predicted_actions
+        
+        # Get covariance from DGN network
+        rng, cov_rng = jax.random.split(rng)
+        L = self.forward_covariance(
+            demo_states, 
+            rng=cov_rng,
+            grad_params=params, 
+            train=True
+        )
+        
+        # zero-mean distribution
+        batch_size = demo_states.shape[0]
+        action_dim = self.config["action_dim"]
+        zero_mean = jnp.zeros((batch_size, action_dim))
+        delta_dist = distrax.MultivariateNormalTri(
+            loc=zero_mean,
+            scale_tri=L
         )
         
         # Compute negative log-likelihood
-        log_probs = sampling_dist.log_prob(demo_actions)
-        loss = -jnp.mean(log_probs)
+        log_probs = delta_dist.log_prob(action_deltas)
+        nll = -jnp.mean(log_probs)
+        
+        # Compute entropy for regularization
+        entropy = delta_dist.entropy().mean()
+        
+        # Apply entropy regularization if configured
+        entropy_coef = self.config.get("dgn_entropy_coef", 0.0)
+        loss = nll
+        if entropy_coef > 0:
+            loss = loss - entropy_coef * entropy
         
         # Get covariance for logging
-        covariance = sampling_dist.covariance()
+        covariance = delta_dist.covariance()
         mean_covariance = jnp.mean(jnp.diagonal(covariance, axis1=-2, axis2=-1))
         
         info = {
             "covariance_loss": loss,
+            "covariance_nll": nll,
+            "covariance_entropy": entropy,
             "mean_covariance": mean_covariance,
-            "covariance_log_det": jnp.mean(jnp.log(jnp.linalg.det(covariance))),
+            "mean_delta_norm": jnp.mean(jnp.linalg.norm(action_deltas, axis=-1)),
         }
         
         return loss, info
@@ -207,15 +218,54 @@ class DGNAgent(SACAgent):
         return losses
 
 
-    def update_covariance(self, demo_batch, pmap_axis=None):
-        """Update only the covariance network on demonstration data."""
-        # Use the standard update mechanism, but only update covariance network
-        return self.update(
-            demo_batch, 
-            pmap_axis=pmap_axis, 
-            networks_to_update=frozenset({"covariance"}),
-            update_covariance_flag=True,
-        )
+    def update_covariance(self, pmap_axis: Optional[str] = None):
+        """Update covariance network on entire demonstration data for multiple epochs."""
+        assert self.demo_dataset is not None, "No demonstration data provided. Initialize agent with demo_dataset."
+            
+        batch_size = self.config.get("dgn_batch_size", 128)
+            
+        dataset_size = len(self.demo_dataset["observations"])
+        indices = jnp.arange(dataset_size)
+            
+        n_epochs = self.config.get("dgn_cov_train_epochs", 1)
+            
+        agent = self
+        all_infos = {}
+            
+        for epoch in range(n_epochs):
+            # Shuffle indices for each epoch
+            rng, shuffle_rng = jax.random.split(agent.state.rng)
+            shuffled_indices = jax.random.permutation(shuffle_rng, indices)
+            
+            # Create batches
+            num_batches = dataset_size // batch_size
+            epoch_infos = []
+            
+            for batch_idx in range(num_batches):
+                start_idx = batch_idx * batch_size
+                end_idx = min(start_idx + batch_size, dataset_size)
+                batch_indices = shuffled_indices[start_idx:end_idx]
+                
+                # Create batch from demo_dataset
+                demo_batch = {
+                    "observations": self.demo_dataset["observations"][batch_indices],
+                    "actions": self.demo_dataset["actions"][batch_indices],
+                }
+                
+                # Update on this batch
+                agent, info = agent.update(
+                    demo_batch,
+                    pmap_axis=pmap_axis,
+                    networks_to_update=frozenset({"covariance"}),
+                )
+                epoch_infos.append(info)
+            
+            # Average info across batches in epoch
+            if epoch == n_epochs - 1:
+                # Keep last epoch's averaged info
+                all_infos = jax.tree_map(lambda *xs: jnp.mean(jnp.stack(xs)), *epoch_infos)
+                
+        return agent, all_infos
     
     def get_noise_scale(self, total_env_steps: int) -> float:
         """
@@ -255,6 +305,10 @@ class DGNAgent(SACAgent):
         """
         Sample actions using data-guided noise for exploration.
         
+        Following the official implementation:
+        - action = policy_mean + perturbation
+        - perturbation ~ N(0, Σ)
+        
         Args:
             observations: Input observations
             seed: Random seed for sampling
@@ -276,8 +330,8 @@ class DGNAgent(SACAgent):
             actions = np.asarray(actions)
             return actions
         
-        # Get the DGN sampling distribution
-        sampling_dist = self.forward_sampling_policy(
+        # Get policy mean and perturbation distribution
+        policy_mean, perturbation_dist = self.forward_sampling_policy(
             observations, 
             rng=seed,
             apply_noise_scaling=True,  # Apply annealing/shutoff
@@ -285,13 +339,16 @@ class DGNAgent(SACAgent):
             train=False
         )
         
-        # Sample actions
+        # Sample perturbation
         if seed is not None:
             rng, sample_rng = jax.random.split(seed)
         else:
             sample_rng = self.state.rng
             
-        actions = sampling_dist.sample(seed=sample_rng)
+        perturbation = perturbation_dist.sample(seed=sample_rng)
+        
+        # Add perturbation to policy mean
+        actions = policy_mean + perturbation
         
         # Clip actions to valid range
         actions = jnp.clip(actions, -1.0, 1.0)
@@ -299,7 +356,7 @@ class DGNAgent(SACAgent):
         # Convert JAX array to NumPy array for environment compatibility
         actions = np.asarray(actions)
         
-        # Ensure actions is a flat array (not nested) TODO: check if this is needed
+        # Ensure actions is a flat array (not nested) for single environment
         if actions.ndim > 1:
             actions = actions.squeeze()
         
@@ -324,16 +381,22 @@ class DGNAgent(SACAgent):
         total_env_steps: Optional[int] = None,
         train: bool = False,
         covariance_train: Optional[bool] = False,
-    ) -> distrax.Distribution:
+    ) -> Tuple[jnp.ndarray, distrax.Distribution]:
         """
-        Forward pass for the DGN sampling policy π_sampling(a|s) = N(μ_θ(s), Σ_φ(s)).
-        This combines the SAC policy mean with the learned DGN covariance.
+        Get policy mean and perturbation distribution for DGN exploration.
+        
+        Following the official implementation, we return:
+        - policy_mean: The deterministic action from the policy
+        - perturbation_dist: N(0, Σ) distribution for exploration noise
+        
+        The final action is: policy_mean + sample from perturbation_dist
         """
         covariance_rng = None
         if train or covariance_train:
             assert rng is not None, "Must specify rng when training"
             rng, covariance_rng = jax.random.split(rng)
             covariance_train = train
+            
         # Get policy mean from SAC
         policy_mean = self.forward_policy(
             observations, 
@@ -341,6 +404,7 @@ class DGNAgent(SACAgent):
             grad_params=grad_params, 
             train=train
         ).mode()
+        
         # Get covariance from DGN network
         L = self.forward_covariance(
             observations, 
@@ -348,15 +412,24 @@ class DGNAgent(SACAgent):
             grad_params=grad_params, 
             train=covariance_train
         )
+        
         # Apply noise scaling if requested
         if apply_noise_scaling:
             if total_env_steps is None:
                 raise ValueError("total_env_steps required when apply_noise_scaling=True")
             noise_scale = self.get_noise_scale(total_env_steps)
             L = L * noise_scale
-        # Create multivariate normal sampling distribution using pure function
-        sampling_dist = _make_sampling_dist(policy_mean, L)
-        return sampling_dist
+        
+        # Create zero-mean perturbation distribution (following official implementation)
+        batch_size = observations.shape[0]
+        action_dim = self.config["action_dim"]
+        zero_mean = jnp.zeros((batch_size, action_dim))
+        perturbation_dist = distrax.MultivariateNormalTri(
+            loc=zero_mean,
+            scale_tri=L
+        )
+        
+        return policy_mean, perturbation_dist
     
     @classmethod
     def create(
@@ -503,7 +576,7 @@ class DGNAgent(SACAgent):
 
 
 
-    @partial(jax.jit, static_argnames=("pmap_axis", "networks_to_update", "update_covariance_flag"))
+    @partial(jax.jit, static_argnames=("pmap_axis", "networks_to_update"))
     def update(
         self,
         batch: Batch,
@@ -512,143 +585,12 @@ class DGNAgent(SACAgent):
         networks_to_update: frozenset[str] = frozenset(
             {"actor", "critic", "temperature"}
         ),
-        update_covariance_flag: bool = False,
     ) -> Tuple["DGNAgent", dict]:
         """
         Take one gradient step on all (or a subset) of the networks in the agent.
         
-        Args:
-            batch: Training batch
-            pmap_axis: Axis for pmap
-            networks_to_update: Networks to update for this call
-            update_covariance_flag: If True, also update covariance network
+        For DGN, the covariance network is updated separately via update_covariance()
+        on demonstration data, not on RL replay buffer data.
         """
-        batch_size = batch["rewards"].shape[0]
-        chex.assert_tree_shape_prefix(batch, (batch_size,))
-
-        rng, key = jax.random.split(self.state.rng)
-
-        # Determine which networks to actually update
-        final_networks_to_update = networks_to_update
-        if update_covariance_flag:
-            final_networks_to_update = networks_to_update | {"covariance"}
-
-        # Compute gradients and update params
-        loss_fns = self.loss_fns(batch)
-
-        # Only compute gradients for specified networks
-        assert final_networks_to_update.issubset(
-            loss_fns.keys()
-        ), f"Invalid gradient steps: {final_networks_to_update}"
-        for key in loss_fns.keys() - final_networks_to_update:
-            loss_fns[key] = lambda params, rng: (0.0, {})
-
-        new_state, info = self.state.apply_loss_fns(
-            loss_fns, pmap_axis=pmap_axis, has_aux=True
-        )
-
-        # Update target network (if requested)
-        if "critic" in final_networks_to_update:
-            new_state = new_state.target_update(self.config["soft_target_update_rate"])
-
-        # Update RNG
-        new_state = new_state.replace(rng=rng)
-
-        # Log learning rates
-        for name, opt_state in new_state.opt_states.items():
-            if (
-                hasattr(opt_state, "hyperparams")
-                and "learning_rate" in opt_state.hyperparams.keys()
-            ):
-                info[f"{name}_lr"] = opt_state.hyperparams["learning_rate"]
-
-        return self.replace(state=new_state), info
-
-        
-    @partial(jax.jit, static_argnames=("utd_ratio", "pmap_axis", "update_covariance_flag"))
-    def update_high_utd(
-        self,
-        batch: Batch,
-        *,
-        utd_ratio: int,
-        pmap_axis: Optional[str] = None,
-        update_covariance_flag: bool = False,
-    ) -> Tuple["DGNAgent", dict]:
-        """
-        Fast JITted high-UTD version of `.update` with DGN covariance support.
-
-        Splits the batch into minibatches, performs `utd_ratio` critic
-        (and target) updates, and then one actor/temperature update.
-
-        Batch dimension must be divisible by `utd_ratio`.
-        """
-        batch_size = batch["rewards"].shape[0]
-        assert (
-            batch_size % utd_ratio == 0
-        ), f"Batch size {batch_size} must be divisible by UTD ratio {utd_ratio}"
-        minibatch_size = batch_size // utd_ratio
-        chex.assert_tree_shape_prefix(batch, (batch_size,))
-
-        def scan_body(carry: Tuple["DGNAgent"], data: Tuple[Batch]):
-            (agent,) = carry
-            (minibatch,) = data
-            agent, info = agent.update(
-                minibatch,
-                pmap_axis=pmap_axis,
-                networks_to_update=frozenset({"critic"}),
-                update_covariance_flag=False,  # Never update covariance during critic updates
-            )
-            return (agent,), info
-
-        def make_minibatch(data: jnp.ndarray):
-            return jnp.reshape(data, (utd_ratio, minibatch_size) + data.shape[1:])
-
-        minibatches = jax.tree_map(make_minibatch, batch)
-
-        (agent,), critic_infos = jax.lax.scan(scan_body, (self,), (minibatches,))
-
-        critic_infos = jax.tree_map(lambda x: jnp.mean(x, axis=0), critic_infos)
-        del critic_infos["actor"]
-        del critic_infos["temperature"]
-
-        # Take one gradient descent step on the actor and temperature
-        # Also handle covariance updates here
-        networks_to_update = frozenset({"actor", "temperature"})
-
-        agent, actor_temp_infos = agent.update(
-            batch,
-            pmap_axis=pmap_axis,
-            networks_to_update=networks_to_update,
-            update_covariance_flag=update_covariance_flag,
-        )
-        del actor_temp_infos["critic"]
-
-        infos = {**critic_infos, **actor_temp_infos}
-
-        return agent, infos 
-
-    def update_high_utd_with_step(
-        self,
-        batch: Batch,
-        step: int,
-        *,
-        utd_ratio: int,
-        pmap_axis: Optional[str] = None,
-    ) -> Tuple["DGNAgent", dict]:
-        """
-        Optimized high-UTD update with automatic covariance scheduling.
-        For UTD > 1 training only.
-        """
-        # Determine if we should update covariance based on step
-        dgn_update_interval = self.config.get("dgn_update_interval")
-        update_covariance_flag = (
-            dgn_update_interval is not None and 
-            step % dgn_update_interval == 0
-        )
-        
-        return self.update_high_utd(
-            batch,
-            utd_ratio=utd_ratio,
-            pmap_axis=pmap_axis,
-            update_covariance_flag=update_covariance_flag,
-        ) 
+        # Override parent to handle covariance updates properly
+        return super().update(batch, pmap_axis=pmap_axis, networks_to_update=networks_to_update) 

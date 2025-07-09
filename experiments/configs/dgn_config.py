@@ -1,35 +1,42 @@
 from ml_collections import ConfigDict
 
-from experiments.configs import sac_config
-
 
 def get_config(updates=None):
-    config = sac_config.get_config()
+    """Config for standalone DGN module."""
+    config = ConfigDict()
     
-    # Override SAC defaults for DGN
-    config.critic_ensemble_size = 10  # Larger ensemble for Adroit tasks
+    # Network architecture
+    config.hidden_dims = (256, 256)
+    config.dropout_rate = 0.5
+    config.activation = "relu"
     
-    # DGN-specific parameters (from paper's Table 2)
-    config.dgn_update_interval = 2000  # N in Algorithm 1
-    config.dgn_annealing_timescale = 30000  # τ for annealing
-    config.dgn_shutoff_success_threshold = None  # Can be set to 0.5 for success-based shutoff
-    config.dgn_shutoff_epochs = 10  # n epochs to measure success rate
+    # Training configuration
+    config.learning_rate = 1e-4
+    config.dgn_batch_size = 128
+    config.dgn_cov_train_epochs = 10
     
-    # DGN covariance network architecture (from paper)
-    config.covariance_network_kwargs = ConfigDict(
-        {
-            "hidden_dims": [256, 256],  # MLP Hidden Size from Table 2
-            "dropout_rate": 0.5,  # Dropout from Table 2
-        }
-    )
+    # Loss configuration
+    config.dgn_entropy_coef = 0.01
     
-    # DGN covariance optimizer (from paper's Table 2)
-    config.dgn_covariance_optimizer_kwargs = ConfigDict(
-        {
-            "learning_rate": 1e-4,  # Same as other networks
-            "weight_decay": 3e-2,  # Weight Decay from Table 2
-        }
-    )
+    # Noise scheduling
+    config.dgn_annealing_timescale = 30000
+    
+    # Success-based shutoff (optional, from paper)
+    config.dgn_shutoff_success_threshold = None
+    config.dgn_shutoff_epochs = 10
+    
+    # Numerical stability
+    config.cov_diagonal_eps = 1e-5
+    config.cov_max_diagonal = 5.0
+    
+    # Optimizer configuration (from paper's Table 2)
+    config.optimizer_kwargs = ConfigDict({
+        "learning_rate": 1e-4,
+        "weight_decay": 3e-2,  # Weight Decay from Table 2
+    })
+    
+    # How often to update DGN during RL training
+    config.dgn_update_interval = 2000 
     
     if updates is not None:
         config.update(ConfigDict(updates).copy_and_resolve_references())

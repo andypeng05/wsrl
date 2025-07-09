@@ -3,6 +3,7 @@ from functools import partial
 
 import gym
 import jax
+import jax.numpy as jnp
 import numpy as np
 import tqdm
 from absl import app, flags, logging
@@ -22,6 +23,7 @@ from wsrl.envs.d4rl_dataset import (
 from wsrl.envs.env_common import get_env_type, make_gym_env
 from wsrl.utils.timer_utils import Timer
 from wsrl.utils.train_utils import concatenate_batches, subsample_batch
+from wsrl.agents.dgn_module import DGNModule
 
 FLAGS = flags.FLAGS
 
@@ -94,6 +96,12 @@ config_flags.DEFINE_config_file(
     "File path to the training hyperparameter configuration.",
     lock_config=False,
 )
+config_flags.DEFINE_config_file(
+    "dgn_config",
+    None,
+    "File path to the DGN hyperparameter configuration.",
+    lock_config=False,
+)
 
 
 def main(_):
@@ -125,9 +133,14 @@ def main(_):
             "exp_descriptor": f"{FLAGS.exp_name}_{FLAGS.env}_{FLAGS.agent}_seed{FLAGS.seed}",
         }
     )
+    
+    # Create variant dict including DGN config if enabled
+    variant = FLAGS.config.to_dict()
+    variant["dgn_config"] = FLAGS.dgn_config.to_dict()
+    
     wandb_logger = WandBLogger(
         wandb_config=wandb_config,
-        variant=FLAGS.config.to_dict(),
+        variant=variant,
         random_str_in_identifier=True,
         disable_online_logging=FLAGS.debug,
     )
@@ -160,7 +173,7 @@ def main(_):
     )
 
     """
-    load dataset
+    load dataset TODO
     """
     if env_type == "adroit-binary":
         dataset = get_hand_dataset_with_mc_calculation(
@@ -204,7 +217,7 @@ def main(_):
     Initialize agent
     """
     rng = jax.random.PRNGKey(FLAGS.seed)
-    rng, construct_rng = jax.random.split(rng)
+    rng, construct_rng, dgn_rng = jax.random.split(rng, 3)
     example_batch = subsample_batch(dataset, FLAGS.batch_size)
     agent = agents[FLAGS.agent].create(
         rng=construct_rng,
@@ -217,6 +230,15 @@ def main(_):
     if FLAGS.resume_path != "":
         assert os.path.exists(FLAGS.resume_path), "resume path does not exist"
         agent = checkpoints.restore_checkpoint(FLAGS.resume_path, target=agent)
+
+    # load DGN
+    dgn_module = DGNModule.create(
+        rng=dgn_rng,
+        observations=example_batch["observations"],
+        actions=example_batch["actions"],
+        demo_dataset=dataset,
+        **FLAGS.dgn_config,
+    )
 
     """
     eval function
@@ -301,8 +323,13 @@ def main(_):
         """
         with timer.context("env step"):
             if is_online_stage:
-                rng, action_rng = jax.random.split(rng)
+                rng, action_rng, noise_rng = jax.random.split(rng, 3)
                 action = agent.sample_actions(observation, seed=action_rng)
+                
+                noise = dgn_module.sample_noise(observation, noise_rng, step)
+                action = action + noise
+                action = np.clip(action, -FLAGS.clip_action, FLAGS.clip_action) #TODO
+                
                 next_observation, reward, done, truncated, info = finetune_env.step(
                     action
                 )
@@ -368,6 +395,11 @@ def main(_):
                         agent, update_info = agent.update(
                             batch,
                         )
+                    
+                    # Update DGN module if enabled
+                    dgn_module, dgn_info = dgn_module.dgn_update(agent, step)
+                    if dgn_info:  # Only log if DGN was updated
+                        update_info.update({f"dgn/{k}": v for k, v in dgn_info.items()})
 
         """
         Advance Step
@@ -420,6 +452,11 @@ def main(_):
             if "update_info" in locals():
                 update_info = jax.device_get(update_info)
                 wandb_logger.log({"training": update_info}, step=step)
+            
+            # Log DGN annealing scale if DGN is enabled and we're in online stage
+            if FLAGS.use_dgn_exploration and is_online_stage:
+                dgn_scale = float(jnp.exp(-max(1, step) / dgn_module.config.dgn_annealing_timescale))
+                wandb_logger.log({"dgn/noise_scale": dgn_scale}, step=step)
 
             wandb_logger.log({"timer": timer.get_average_times()}, step=step)
 

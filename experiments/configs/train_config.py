@@ -276,41 +276,98 @@ def get_config(config_string):
             )
         ),
 
-        "adroit_dgn": ConfigDict(
+        "adroit_rlpd": ConfigDict(
             dict(
-                agent_kwargs=get_dgn_config(
+                agent_kwargs=get_sac_config(
                     updates=dict(
-                        # Adroit-specific hyperparameters from paper's Table 1 & 2
+                        # RLPD hyperparameters for Adroit from Table 1
+                        discount=0.99,
+                        soft_target_update_rate=0.005,  # τ in paper
                         critic_ensemble_size=10,
-                        soft_target_update_rate=0.005,
-                        policy_network_kwargs={
-                            "hidden_dims": [256, 256],
-                            "activations": "relu",
-                        },
+                        
+                        # Network architectures from Table 1
                         critic_network_kwargs={
-                            "hidden_dims": [256, 256],
+                            "hidden_dims": [256, 256, 256],  # 3 hidden layers
                             "activations": "relu",
                         },
-                        covariance_network_kwargs={
-                            "hidden_dims": [256, 256],  # MLP Hidden Size from Table 2
-                            "dropout_rate": 0.5,
+                        policy_network_kwargs={
+                            "hidden_dims": [256, 256, 256],  # 3 hidden layers  
+                            "activations": "relu",
                         },
-                        # DGN hyperparameters for Adroit from Table 2
-                        dgn_update_interval=2000,
-                        dgn_annealing_timescale=30000,
-                        dgn_shutoff_success_threshold=None,  # Paper doesn't use shutoff for Adroit
+                        
+                        # Optimizers from Table 1
                         actor_optimizer_kwargs={
                             "learning_rate": 1e-4,
                         },
                         critic_optimizer_kwargs={
                             "learning_rate": 1e-4,
                         },
+                        temperature_optimizer_kwargs={
+                            "learning_rate": 1e-4,
+                        },
+                        
+                    )
+                ).to_dict(),
+            )
+        ),
+
+        "adroit_dgn": ConfigDict(
+            dict(
+                agent_kwargs=get_sac_config(
+                    updates=dict(
+                        # Base RLPD hyperparameters for Adroit (Table 1 in paper)
+                        batch_size=128,
+                        discount=0.99,
+                        soft_target_update_rate=0.005,  # τ in paper
+                        critic_ensemble_size=10,
+                        utd_ratio=20,
+                        actor_update_interval=1,
+                        
+                        # Network architectures from Table 1
+                        critic_network_kwargs={
+                            "hidden_dims": [256, 256, 256],  # 3 hidden layers
+                            "activations": "relu",
+                        },
+                        policy_network_kwargs={
+                            "hidden_dims": [256, 256, 256],  # 3 hidden layers  
+                            "activations": "relu",
+                        },
+                        
+                        # Optimizers
+                        actor_optimizer_kwargs={
+                            "learning_rate": 1e-4,
+                        },
+                        critic_optimizer_kwargs={
+                            "learning_rate": 1e-4,
+                        },
+                        temperature_optimizer_kwargs={
+                            "learning_rate": 1e-4,
+                        },
+                        
+                        # DGN-specific parameters (Table 2 in paper)
+                        dgn_update_interval=2000,  # N in paper
+                        dgn_annealing_timescale=30000,
+                        dgn_shutoff_success_threshold=None,  # Not used for Adroit
+                        dgn_shutoff_epochs=10,
+                        dgn_entropy_coef=0.0,
+                        cov_diagonal_eps=1e-5,
+                        dgn_cov_train_epochs=10,  # epochs per update
+                        dgn_batch_size=128,
+                        
+                        # DGN covariance network (Table 2)
+                        covariance_network_kwargs={
+                            "hidden_dims": [256, 256],  # 2 hidden layers
+                            "dropout_rate": 0.5,
+                        },
+                        
+                        # DGN covariance optimizer (Table 2)
                         dgn_covariance_optimizer_kwargs={
                             "learning_rate": 1e-4,
                             "weight_decay": 3e-2,
                         },
                     )
                 ).to_dict(),
+                agent_name="dgn",  # Use DGNAgent instead of SACAgent
             )
         ),
     }
