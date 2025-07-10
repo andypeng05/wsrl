@@ -284,6 +284,7 @@ def get_config(config_string):
                         discount=0.99,
                         soft_target_update_rate=0.005,  # τ in paper
                         critic_ensemble_size=10,
+                        critic_subsample_size=2,
                         
                         # Network architectures from Table 1
                         critic_network_kwargs={
