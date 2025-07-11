@@ -315,7 +315,7 @@ def get_config(config_string):
         "adroit_dgn": get_dgn_config(
             updates=dict(
                 # DGN-specific parameters optimized for Adroit (Table 2 in paper)
-                dgn_update_interval=200,  # N in paper TODO: change to 2000
+                dgn_update_interval=2000,  # N in paper TODO: change to 2000
                 dgn_annealing_timescale=30000,
                 dgn_shutoff_success_threshold=None,  # Not used for Adroit
                 dgn_shutoff_epochs=10,

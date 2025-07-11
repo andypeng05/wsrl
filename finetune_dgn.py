@@ -423,13 +423,10 @@ def main(_):
                             batch,
                         )
 
-        # Update DGN module during online training (independent of warmup)
-        dgn_module, dgn_info = dgn_module.dgn_update(agent, step)
-        if dgn_info:  # Only log if DGN was updated
-            if "update_info" in locals():
-                update_info.update({f"dgn/{k}": v for k, v in dgn_info.items()})
-            else:
-                update_info = {f"dgn/{k}": v for k, v in dgn_info.items()}
+                # Update DGN module during online training (independent of warmup)
+                dgn_module, dgn_info = dgn_module.dgn_update(agent, step)
+                if dgn_info:  # Only log if DGN was updated
+                    wandb_logger.log({"dgn": dgn_info}, step=step)
 
         """
         Advance Step
