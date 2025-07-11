@@ -60,6 +60,9 @@ flags.DEFINE_bool(
 flags.DEFINE_integer(
     "warmup_steps", 0, "number of warmup steps (WSRL) before performing online updates"
 )
+flags.DEFINE_integer(
+    "dgn_traj_len", 100, "maximum trajectory length to add to DGN dataset"
+)
 
 # agent
 flags.DEFINE_string("agent", "calql", "what RL agent to use")
@@ -289,6 +292,9 @@ def main(_):
     is_online_stage = False
     observation, info = finetune_env.reset()
     done = False  # env done signal
+    curr_traj = []
+    curr_traj_len = 0
+    added_transition_count = 0
 
     for _ in tqdm.tqdm(range(step, FLAGS.num_offline_steps + FLAGS.num_online_steps)):
         """
@@ -343,11 +349,24 @@ def main(_):
                     dones=1.0 if (done or truncated) else 0,
                 )
                 replay_buffer.insert(transition)
+                curr_traj.append(transition)
+                curr_traj_len += 1
 
                 observation = next_observation
                 if done or truncated:
+                    if done and curr_traj_len <= FLAGS.dgn_traj_len and reward == 0:
+                        curr_traj_dict = {k:[] for k in curr_traj[0].keys()}
+                        for i in range(curr_traj_len):
+                            for k, v in curr_traj[i].items():
+                                curr_traj_dict[k].append(v)
+
+                        dgn_module.add_to_dataset(curr_traj_dict)
+                        added_transition_count += curr_traj_len
+                        print(f"Added {curr_traj_len} transitions to DGN dataset")
+                    curr_traj = []
                     observation, info = finetune_env.reset()
                     done = False
+                    curr_traj_len = 0
 
         """
         Updates
@@ -451,12 +470,17 @@ def main(_):
         Logging
         """
         if step % FLAGS.log_interval == 0:
+            wandb_logger.log({
+                "dgn_dataset_size": len(dgn_module.demo_dataset["observations"]),
+                "dgn_trajectories_added_this_interval": added_transition_count
+            }, step=step)
             # check if update_info is available (False during warmup)
             if "update_info" in locals():
                 update_info = jax.device_get(update_info)
                 wandb_logger.log({"training": update_info}, step=step)
 
             wandb_logger.log({"timer": timer.get_average_times()}, step=step)
+
 
 
 if __name__ == "__main__":

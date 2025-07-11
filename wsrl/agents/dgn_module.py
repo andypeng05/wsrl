@@ -76,7 +76,7 @@ class DGNModule:
     def __init__(self, state: JaxRLTrainState, config: ConfigDict, demo_dataset: dict):
         self.state = state
         self.config = config
-        self.demo_dataset = demo_dataset
+        self.demo_dataset = {k:list(v) for k, v in demo_dataset.items()} # for extendability
         self.step = 0
     
     def replace(self, **kwargs):
@@ -197,8 +197,10 @@ class DGNModule:
         
         # Sample from demo dataset
         indices = np.random.choice(len(self.demo_dataset["observations"]), size=batch_size, replace=False)
-        observations = self.demo_dataset["observations"][indices]
-        expert_actions = self.demo_dataset["actions"][indices]
+        
+        # Extract samples using list comprehension (more efficient than array conversion)
+        observations = np.array([self.demo_dataset["observations"][i] for i in indices])
+        expert_actions = np.array([self.demo_dataset["actions"][i] for i in indices])
         
         # Get deterministic policy actions
         predicted_actions = agent.forward_policy(observations, train=False).mode()
@@ -268,6 +270,13 @@ class DGNModule:
             return self.update(agent, env_step)
         return self, {}
     
+    def add_to_dataset(self, trajectory: dict):
+        """Add trajectory to dataset."""
+        keys = ['observations', 'next_observations', 'actions', 'rewards', 'dones', 'masks']
+        for key in keys:
+            self.demo_dataset[key].extend(trajectory[key])
+        self.demo_dataset["mc_returns"].extend(np.zeros(len(trajectory["rewards"]))) # quick fix since we don't use mc_returns
+
     @classmethod
     def create(
         cls,
@@ -292,7 +301,6 @@ class DGNModule:
         config = ConfigDict(kwargs)
         config.action_dim = actions.shape[-1]
         config.observation_dim = observations.shape[-1] if observations.ndim > 1 else observations.shape[0]
-        config.demo_dataset_size = len(demo_dataset["observations"])
         
         # Store architecture configs for reference
         config.covariance_network_kwargs = covariance_network_kwargs
