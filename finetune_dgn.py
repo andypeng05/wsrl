@@ -354,7 +354,7 @@ def main(_):
 
                 observation = next_observation
                 if done or truncated:
-                    if done and curr_traj_len <= FLAGS.dgn_traj_len and reward == 0:
+                    if done and curr_traj_len <= FLAGS.dgn_traj_len and info["goal_achieved"]:
                         curr_traj_dict = {k:[] for k in curr_traj[0].keys()}
                         for i in range(curr_traj_len):
                             for k, v in curr_traj[i].items():
