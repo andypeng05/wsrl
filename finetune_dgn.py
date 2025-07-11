@@ -12,6 +12,7 @@ from ml_collections import config_flags
 
 from experiments.configs.ensemble_config import add_redq_config
 from wsrl.agents import agents
+from wsrl.agents.dgn_module import DGNModule
 from wsrl.common.evaluation import evaluate_with_trajectories
 from wsrl.common.wandb import WandBLogger
 from wsrl.data.replay_buffer import ReplayBuffer, ReplayBufferMC
@@ -23,7 +24,6 @@ from wsrl.envs.d4rl_dataset import (
 from wsrl.envs.env_common import get_env_type, make_gym_env
 from wsrl.utils.timer_utils import Timer
 from wsrl.utils.train_utils import concatenate_batches, subsample_batch
-from wsrl.agents.dgn_module import DGNModule
 
 FLAGS = flags.FLAGS
 
@@ -36,6 +36,8 @@ flags.DEFINE_float(
     0.99999,
     "Clip actions to be between [-n, n]. This is needed for tanh policies.",
 )
+flags.DEFINE_bool("add_expert_demos", True, "Include expert demos in offline data")
+flags.DEFINE_bool("add_bc_demos", True, "Include bc demos in offline data")
 
 # training
 flags.DEFINE_integer("num_offline_steps", 1_000_000, "Number of offline epochs.")
@@ -136,11 +138,11 @@ def main(_):
             "exp_descriptor": f"{FLAGS.exp_name}_{FLAGS.env}_{FLAGS.agent}_seed{FLAGS.seed}",
         }
     )
-    
+
     # Create variant dict including DGN config if enabled
     variant = FLAGS.config.to_dict()
     variant["dgn_config"] = FLAGS.dgn_config.to_dict()
-    
+
     wandb_logger = WandBLogger(
         wandb_config=wandb_config,
         variant=variant,
@@ -182,6 +184,8 @@ def main(_):
         dataset = get_hand_dataset_with_mc_calculation(
             FLAGS.env,
             gamma=FLAGS.config.agent_kwargs.discount,
+            add_expert_demos=FLAGS.add_expert_demos,
+            add_bc_demos=FLAGS.add_bc_demos,
             reward_scale=FLAGS.reward_scale,
             reward_bias=FLAGS.reward_bias,
             clip_action=FLAGS.clip_action,
@@ -331,11 +335,11 @@ def main(_):
             if is_online_stage:
                 rng, action_rng, noise_rng = jax.random.split(rng, 3)
                 action = agent.sample_actions(observation, seed=action_rng)
-                
+
                 noise = dgn_module.sample_noise(observation, noise_rng, step)
                 action = action + noise
-                action = np.clip(action, -FLAGS.clip_action, FLAGS.clip_action) #TODO
-                
+                action = np.clip(action, -FLAGS.clip_action, FLAGS.clip_action)  # TODO
+
                 next_observation, reward, done, truncated, info = finetune_env.step(
                     action
                 )
@@ -354,8 +358,12 @@ def main(_):
 
                 observation = next_observation
                 if done or truncated:
-                    if done and curr_traj_len <= FLAGS.dgn_traj_len and info["goal_achieved"]:
-                        curr_traj_dict = {k:[] for k in curr_traj[0].keys()}
+                    if (
+                        done
+                        and curr_traj_len <= FLAGS.dgn_traj_len
+                        and info["goal_achieved"]
+                    ):
+                        curr_traj_dict = {k: [] for k in curr_traj[0].keys()}
                         for i in range(curr_traj_len):
                             for k, v in curr_traj[i].items():
                                 curr_traj_dict[k].append(v)
@@ -414,7 +422,7 @@ def main(_):
                         agent, update_info = agent.update(
                             batch,
                         )
-        
+
         # Update DGN module during online training (independent of warmup)
         dgn_module, dgn_info = dgn_module.dgn_update(agent, step)
         if dgn_info:  # Only log if DGN was updated
@@ -470,17 +478,19 @@ def main(_):
         Logging
         """
         if step % FLAGS.log_interval == 0:
-            wandb_logger.log({
-                "dgn_dataset_size": len(dgn_module.demo_dataset["observations"]),
-                "dgn_trajectories_added_this_interval": added_transition_count
-            }, step=step)
+            wandb_logger.log(
+                {
+                    "dgn_dataset_size": len(dgn_module.demo_dataset["observations"]),
+                    "dgn_trajectories_added_this_interval": added_transition_count,
+                },
+                step=step,
+            )
             # check if update_info is available (False during warmup)
             if "update_info" in locals():
                 update_info = jax.device_get(update_info)
                 wandb_logger.log({"training": update_info}, step=step)
 
             wandb_logger.log({"timer": timer.get_average_times()}, step=step)
-
 
 
 if __name__ == "__main__":
