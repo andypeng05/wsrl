@@ -22,6 +22,7 @@ def get_hand_dataset_with_mc_calculation(
     reward_bias=0.0,
     pos_ind=-1,
     clip_action=None,
+    offline_include_success_only=False,
 ):
     assert env_name in [
         "pen-binary-v0",
@@ -110,19 +111,23 @@ def get_hand_dataset_with_mc_calculation(
             )
             dataset[i].pop("terminals", None)
 
-            if not (0 in dataset[i]["rewards"]):
-                continue
+            if (0 in dataset[i]["rewards"]):
+                trunc_ind = np.where(dataset[i]["rewards"] == 0)[0][pos_ind] + 1
+            else:
+                trunc_ind = None
 
-            trunc_ind = np.where(dataset[i]["rewards"] == 0)[0][pos_ind] + 1
-            d_pos = truncate_traj(
-                env_name,
-                dataset,
-                i,
-                gamma,
-                start_index=None,
-                end_index=trunc_ind,
-            )
-            dataset_list.append(d_pos)
+            if trunc_ind is not None or not offline_include_success_only:
+                d_full = truncate_traj(
+                    env_name,
+                    dataset,
+                    i,
+                    gamma,
+                    start_index=None,
+                    end_index=trunc_ind,
+                )
+                dataset_list.append(d_full)
+            else:
+                continue  # Skip non-successful trajectories when offline_include_success_only=True
 
     if add_bc_demos:
         print("loading BC demos from:", bc_demo_paths[env_name])
@@ -132,18 +137,23 @@ def get_hand_dataset_with_mc_calculation(
             dataset_bc[i]["dones"] = dataset_bc[i]["terminals"].squeeze()
             dataset_bc[i].pop("terminals", None)
 
-            if not (0 in dataset_bc[i]["rewards"]):
-                continue
-            trunc_ind = np.where(dataset_bc[i]["rewards"] == 0)[0][pos_ind] + 1
-            d_pos = truncate_traj(
-                env_name,
-                dataset_bc,
-                i,
-                gamma,
-                start_index=None,
-                end_index=trunc_ind,
-            )
-            dataset_bc_list.append(d_pos)
+            if (0 in dataset_bc[i]["rewards"]):
+                trunc_ind = np.where(dataset_bc[i]["rewards"] == 0)[0][pos_ind] + 1
+            else:
+                trunc_ind = None
+
+            if trunc_ind is not None or not offline_include_success_only:
+                d_full = truncate_traj(
+                    env_name,
+                    dataset_bc,
+                    i,
+                    gamma,
+                    start_index=None,
+                    end_index=trunc_ind,
+                )
+                dataset_bc_list.append(d_full)
+            else:
+                continue  # Skip non-successful trajectories when offline_include_success_only=True
 
     dataset = np.concatenate([dataset_list, dataset_bc_list])
 

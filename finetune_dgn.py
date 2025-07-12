@@ -38,6 +38,7 @@ flags.DEFINE_float(
 )
 flags.DEFINE_bool("add_expert_demos", True, "Include expert demos in offline data")
 flags.DEFINE_bool("add_bc_demos", True, "Include bc demos in offline data")
+flags.DEFINE_bool("offline_include_success_only", False, "Include only successful trajectories in the offline dataset")
 
 # training
 flags.DEFINE_integer("num_offline_steps", 1_000_000, "Number of offline epochs.")
@@ -63,7 +64,7 @@ flags.DEFINE_integer(
     "warmup_steps", 0, "number of warmup steps (WSRL) before performing online updates"
 )
 flags.DEFINE_integer(
-    "dgn_traj_len", 100, "maximum trajectory length to add to DGN dataset"
+    "dgn_traj_len", 0, "maximum trajectory length to add to DGN dataset"
 )
 
 # agent
@@ -189,6 +190,7 @@ def main(_):
             reward_scale=FLAGS.reward_scale,
             reward_bias=FLAGS.reward_bias,
             clip_action=FLAGS.clip_action,
+            offline_include_success_only=FLAGS.offline_include_success_only,
         )
     else:
         if FLAGS.agent == "calql":
